@@ -29,6 +29,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_path = format!("{}/echodrop.db", cfg.storage_path.trim_end_matches('/'));
     let pool = db::create_pool(&db_path).await?;
     db::migrate(&pool).await?;
+    // users-таблица нужна в open/closed (ЛК); создаём всегда — пустая таблица
+    // в free режиме безвредна, зато чистый деплой в open не словит 500 на регистрации.
+    db::migrate_users(&pool).await?;
     // events-таблица рождается ТОЛЬКО при tracking=true: при false данных
     // нет ни в БД, ни на диске (решение по приватности).
     if cfg.tracking {
