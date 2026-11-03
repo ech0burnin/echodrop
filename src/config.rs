@@ -70,8 +70,17 @@ pub struct Config {
     #[serde(default = "default_max_file_size_mb")]
     pub max_file_size_mb: u64,
     /// Время жизни файла по умолчанию, часы (168 = неделя).
+    /// 0 = «бессрочно» — допустимо только при allow_infinite_ttl = true.
     #[serde(default = "default_default_ttl_hours")]
     pub default_ttl_hours: u64,
+    /// Потолок срока хранения, который клиент вправе попросить, часы.
+    /// Просьба выше — 400. Должен быть >= 1 (проверяется при старте).
+    #[serde(default = "default_max_ttl_hours")]
+    pub max_ttl_hours: u64,
+    /// Разрешить бессрочные файлы (ttl_hours = 0 = никогда не истекает).
+    /// false — запрос с ttl=0 отклоняется (400), вечных файлов нет.
+    #[serde(default)]
+    pub allow_infinite_ttl: bool,
     /// Имя сайта — идёт в шапку страниц и `<title>`.
     #[serde(default = "default_site_name")]
     pub site_name: String,
@@ -99,6 +108,11 @@ fn default_max_file_size_mb() -> u64 {
 }
 fn default_default_ttl_hours() -> u64 {
     168
+}
+fn default_max_ttl_hours() -> u64 {
+    // 30 суток: щедрый потолок для «уронил — друг забрал в течение месяца»,
+    // владелец инстанса может ужать хоть до 1 часа.
+    720
 }
 fn default_site_name() -> String {
     "echodrop".to_string()
@@ -164,6 +178,19 @@ impl Config {
                     v.parse().map_err(|_| format!("ECHODROP_DEFAULT_TTL_HOURS: {v:?} — не число"))?;
             }
         }
+        if let Ok(v) = std::env::var("ECHODROP_MAX_TTL_HOURS") {
+            if !v.is_empty() {
+                cfg.max_ttl_hours =
+                    v.parse().map_err(|_| format!("ECHODROP_MAX_TTL_HOURS: {v:?} — не число"))?;
+            }
+        }
+        if let Ok(v) = std::env::var("ECHODROP_ALLOW_INFINITE_TTL") {
+            if !v.is_empty() {
+                cfg.allow_infinite_ttl = v
+                    .parse()
+                    .map_err(|_| format!("ECHODROP_ALLOW_INFINITE_TTL: {v:?} — ожидается true|false"))?;
+            }
+        }
         if let Ok(v) = std::env::var("ECHODROP_SITE_NAME") {
             if !v.is_empty() {
                 cfg.site_name = v;
@@ -180,6 +207,64 @@ impl Config {
             }
         }
 
+        cfg.validate_ttl()?;
+
         Ok(cfg)
     }
+
+    /// Проверка согласованности TTL-настроек. Ошибиться здесь должен
+    /// старт, а не первый upload с невнятным 400.
+    pub fn validate_ttl(&self) -> Result<(), String> {
+        if self.max_ttl_hours == 0 {
+            return Err("max_ttl_hours = 0 запрещён: потолок срока должен быть >= 1 часа (бессрочность — отдельный флаг allow_infinite_ttl)".into());
+        }
+        if self.default_ttl_hours == 0 && !self.allow_infinite_ttl {
+            return Err("default_ttl_hours = 0 (бессрочно) требует allow_infinite_ttl = true".into());
+        }
+        if self.default_ttl_hours > self.max_ttl_hours {
+            return Err(format!(
+                "default_ttl_hours ({}) больше max_ttl_hours ({}) — подними потолок или занизь дефолт",
+                self.default_ttl_hours, self.max_ttl_hours
+            ));
+        }
+        Ok(())
+    }
 }
+
+#[cfg(test)]
+mod tests {
+        use super::*;
+
+        /// Дефолтный конфиг собирается и проходит валидацию.
+        /// (from_str, а не load: load читает echodrop.toml/env и в тестовом
+        /// окружении результат зависел бы от случайного cwd.)
+        #[test]
+        fn defaults_are_valid() {
+            let cfg: Config = toml::from_str("").unwrap();
+            cfg.validate_ttl().unwrap();
+            assert_eq!(cfg.max_ttl_hours, 720);
+            assert_eq!(cfg.default_ttl_hours, 168);
+            assert!(!cfg.allow_infinite_ttl);
+        }
+
+        /// Валидация ловит кривые комбинации TTL-настроек.
+        #[test]
+        fn ttl_validation() {
+            let mut cfg: Config = toml::from_str("").unwrap();
+            cfg.max_ttl_hours = 0;
+            assert!(cfg.validate_ttl().is_err());
+
+            let mut cfg: Config = toml::from_str("").unwrap();
+            cfg.default_ttl_hours = 0;
+            assert!(cfg.validate_ttl().is_err()); // без allow_infinite
+
+            let mut cfg: Config = toml::from_str("").unwrap();
+            cfg.default_ttl_hours = 0;
+            cfg.allow_infinite_ttl = true;
+            assert!(cfg.validate_ttl().is_ok());
+
+            let mut cfg: Config = toml::from_str("").unwrap();
+            cfg.default_ttl_hours = 2000;
+            assert!(cfg.validate_ttl().is_err()); // default > max
+        }
+    }

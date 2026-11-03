@@ -45,6 +45,7 @@ struct Assets;
 pub fn router(max_upload_bytes: usize) -> Router<AppState> {
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/config.json", get(public_config))
         .route("/", get(index))
         .route("/static/{file}", get(static_file))
         .route("/upload", axum::routing::post(upload).put(upload))
@@ -61,6 +62,25 @@ pub fn router(max_upload_bytes: usize) -> Router<AppState> {
 /// GET /healthz — для мониторинга/uptime-проб.
 async fn healthz() -> &'static str {
     "ok"
+}
+
+/// GET /config.json — публичные параметры для фронтенда: фронт по ним
+/// строит список опций TTL (не длиннее max_ttl_hours, «∞» только при
+/// allow_infinite_ttl), показывает дисклеймер трекинга и лимит размера.
+/// Секретов тут нет — всё и так видно из поведения сайта.
+async fn public_config(State(state): State<AppState>) -> Response {
+    Json(json!({
+        "site_name": state.config.site_name,
+        "mode": state.config.mode.to_string(),
+        "max_file_size_mb": state.config.max_file_size_mb,
+        // 0 = «бессрочно» (возможен только при allow_infinite_ttl = true)
+        "default_ttl_hours": state.config.default_ttl_hours,
+        "max_ttl_hours": state.config.max_ttl_hours,
+        "allow_infinite_ttl": state.config.allow_infinite_ttl,
+        "tracking": state.config.tracking,
+        "base_url": state.config.base_url,
+    }))
+    .into_response()
 }
 
 /// GET / — главная (embedded index.html).
@@ -234,12 +254,17 @@ async fn multipart_upload(state: AppState, req: Request) -> Response {
     bad_request("multipart: поле file не найдено")
 }
 
-/// Raw-режим (curl -T): тело = файл, имя из X-Filename, TTL из конфига.
+/// Raw-режим (curl -T): тело = файл, имя из X-Filename, TTL из X-TTL-Hours
+/// (нет заголовка — default из конфига).
 async fn raw_upload(state: AppState, headers: axum::http::HeaderMap, body: Body) -> Response {
     let name = headers
         .get("x-filename")
         .and_then(|v| v.to_str().ok())
         .map(sanitize_name);
+    let ttl_hours = headers
+        .get("x-ttl-hours")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<u64>().ok());
     let password = headers
         .get("x-password")
         .and_then(|v| v.to_str().ok())
@@ -288,7 +313,7 @@ async fn raw_upload(state: AppState, headers: axum::http::HeaderMap, body: Body)
         stored,
         name,
         "application/octet-stream".to_string(),
-        state.config.default_ttl_hours,
+        ttl_hours.unwrap_or(state.config.default_ttl_hours),
         password,
         &headers,
     )
@@ -296,6 +321,8 @@ async fn raw_upload(state: AppState, headers: axum::http::HeaderMap, body: Body)
 }
 
 /// Общая концовка upload: строка в БД + JSON со ссылкой.
+/// TTL-правила: 0 = «бессрочно» (только при allow_infinite_ttl),
+/// выше max_ttl_hours — отказ. Сырой blob при отказе прибираем за собой.
 async fn finish_upload(
     state: &AppState,
     stored: StoredBlob,
@@ -305,12 +332,29 @@ async fn finish_upload(
     password: Option<String>,
     headers: &HeaderMap,
 ) -> Response {
+    if ttl_hours == 0 && !state.config.allow_infinite_ttl {
+        drop_unreferenced_blob(state, &stored.sha256).await;
+        return bad_request("бессрочное хранение запрещено настройками сервера (ttl_hours = 0)");
+    }
+    if ttl_hours > state.config.max_ttl_hours {
+        drop_unreferenced_blob(state, &stored.sha256).await;
+        return bad_request(format!(
+            "срок хранения не больше {} ч",
+            state.config.max_ttl_hours
+        ));
+    }
     let code = match codes::unique(&state.db).await {
         Ok(c) => c,
         Err(e) => return internal(format!("генерация кода: {e}")),
     };
     let now = janitor::now_secs();
-    let expires_at = now + (ttl_hours as i64) * 3600;
+    // 0 = «никогда не истекает»: janitor сравнивает expires_at <= now,
+    // i64::MAX не протухнет (см. janitor.rs).
+    let expires_at = if ttl_hours == 0 {
+        i64::MAX
+    } else {
+        now + (ttl_hours as i64) * 3600
+    };
     let name = orig_name.unwrap_or_else(|| "unnamed".to_string());
 
     // Ф3b: если юзер залогинен — файл его. Нет — ничей (Free-режим).
@@ -342,7 +386,7 @@ async fn finish_upload(
     .bind(&stored.sha256)
     .bind(now)
     .bind(expires_at)
-    .bind(pw_hash)
+    .bind(&pw_hash)
     .bind(owner_id)
     .execute(&state.db)
     .await;
@@ -354,14 +398,34 @@ async fn finish_upload(
             }
             Json(json!({
                 "short_code": code,
-            "url": format!("{}/{}", state.config.base_url.trim_end_matches('/'), code),
-                "expires_at": expires_at,
+                "url": format!("{}/{}", state.config.base_url.trim_end_matches('/'), code),
+                // null = бессрочный (ttl_hours = 0), фронт пишет «навсегда»
+                "expires_at": if expires_at == i64::MAX { serde_json::Value::Null } else { serde_json::Value::from(expires_at) },
+                "ttl_hours": ttl_hours,
                 "size": stored.size,
                 "sha256": stored.sha256,
+                // фронт рисует бейдж замка; пароль и хэш наружу не выходят
+                "has_password": pw_hash.is_some(),
             }))
             .into_response()
         }
         Err(e) => internal(format!("БД: {e}")),
+    }
+}
+
+/// Прибрать blob после отказа в upload — только если на него не ссылается
+/// ни одна строка БД (дедуп: одинаковый контент = один blob на всех).
+async fn drop_unreferenced_blob(state: &AppState, sha256: &str) {
+    let (refs,): (i64,) = match sqlx::query_as("SELECT count(*) FROM files WHERE sha256 = ?1")
+        .bind(sha256)
+        .fetch_one(&state.db)
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => return, // не смогли проверить — лучше оставить blob (сироту заберёт janitor)
+    };
+    if refs == 0 {
+        storage::remove_blob(&state.config.storage_path, sha256).await;
     }
 }
 
@@ -584,7 +648,7 @@ fn page_shell(title: &str, body: &str) -> Html<String> {
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>{title}</title>
 <link rel="stylesheet" href="/static/style.css">
 </head><body>
-<script>document.body.dataset.theme = localStorage.getItem('echodrop_theme') || 'auto';</script>
+<script>document.body.dataset.theme = localStorage.getItem('echodrop_theme') || 'dark';</script>
 <div class="wrap">
 <header class="site"><img src="/static/logo.svg" alt=""><h1>echodrop</h1></header>
 {body}</div></body></html>"#
@@ -689,8 +753,8 @@ async fn my_page(State(state): State<AppState>, headers: HeaderMap) -> Response 
         )
             .into_response();
     };
-    let rows: Vec<(String, i64, String, i64, i64, i64)> = sqlx::query_as(
-        "SELECT short_code, size, orig_name, expires_at, downloads, id \
+    let rows: Vec<(String, i64, String, i64, i64, i64, Option<String>)> = sqlx::query_as(
+        "SELECT short_code, size, orig_name, expires_at, downloads, id, password_hash \
          FROM files WHERE owner_id = (SELECT id FROM users WHERE login = ?1) ORDER BY id DESC",
     )
     .bind(&login)
@@ -699,20 +763,27 @@ async fn my_page(State(state): State<AppState>, headers: HeaderMap) -> Response 
     .unwrap_or_default();
     let now = janitor::now_secs();
     let mut cards = String::new();
-    for (code, size, name, expires_at, downloads, id) in rows {
-        let expired = expires_at <= now;
-        let status = if expired { "истёк" } else { "жив" };
+    for (code, size, name, expires_at, downloads, id, pw_hash) in rows {
+        let infinite = expires_at == i64::MAX;
+        let expired = !infinite && expires_at <= now;
+        let status = if infinite { "навсегда" } else if expired { "истёк" } else { "жив" };
+        let lock = if pw_hash.is_some() { " · 🔒 запаролен" } else { "" };
+        let until = if infinite {
+            "без срока".to_string()
+        } else if expired {
+            "—".to_string()
+        } else {
+            format!("до смерти {}", human_time(expires_at - now))
+        };
         let card = format!(
             r#"<div class="panel"><div class="row">
   <div><b>{name}</b> <span class="muted">({})</span><br>
-  <span class="muted">{code} · {} · {} · скачали {downloads} раз · {status}</span></div>
+  <span class="muted">{code} · {until} · скачали {downloads} раз · {status}{lock}</span></div>
   <form method="post" action="/my/del/{id}" style="margin:0">
     <button class="danger" type="submit">удалить</button>
   </form>
 </div></div>"#,
             human_size(size),
-            human_time(expires_at - now),
-            if expired { "—" } else { "до смерти" }
         );
         cards.push_str(&card);
     }
@@ -1162,6 +1233,8 @@ async fn test_state(tag: &str) -> AppState {
             storage_path: dir.to_str().unwrap().into(),
             max_file_size_mb: 10,
             default_ttl_hours: 1,
+            max_ttl_hours: 720,
+            allow_infinite_ttl: false,
             site_name: "echodrop-test".into(),
             tracking: false,
             base_url: "http://test".into(),
@@ -1248,26 +1321,124 @@ async fn multipart_roundtrip() {
     assert_eq!(&got[..], content.as_bytes());
 }
 
-/// (b) ttl_hours=0 -> файл сразу истёк -> GET 404.
+/// (b) TTL-семантика: 0 = «бессрочно» (только при allow_infinite_ttl),
+/// истёкший файл -> 404, превышение потолка -> 400 + blob прибран.
 #[tokio::test]
 async fn expired_is_404() {
-    let state = test_state("ttl").await;
-    let app = router(10 * 1024 * 1024).with_state(state);
+    let mut state = test_state("ttl").await;
+    state.config.allow_infinite_ttl = true;
+    let app = router(10 * 1024 * 1024).with_state(state.clone());
 
+    // ttl=0 при allow_infinite -> вечный: JSON с expires_at = null
     let resp = app
         .clone()
-        .oneshot(post_upload(&app, "XBOUND", multipart_body("XBOUND", "gone.txt", "bye", Some(0))))
+        .oneshot(post_upload(&app, "XBOUND", multipart_body("XBOUND", "forever.txt", "stay", Some(0))))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let code = take_code(&json_body(resp).await);
+    let json = json_body(resp).await;
+    assert!(json["expires_at"].is_null(), "вечный файл: null, а не число");
+    let code = json["short_code"].as_str().unwrap().to_string();
 
     let req = Request::builder()
         .uri(format!("/{code}"))
         .body(Body::empty())
         .unwrap();
-    let resp = app.oneshot(req).await.unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "вечный файл отдаётся");
+
+    // janitor не должен трогать вечные: прогоняем чистку напрямую
+    janitor::cleanup_expired(&state.db, &state.config.storage_path)
+        .await
+        .unwrap();
+    let (n,): (i64,) = sqlx::query_as("SELECT count(*) FROM files WHERE short_code = ?1")
+        .bind(&code)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(n, 1, "janitor не удалил вечный файл");
+
+    // ttl=1ч отгрузили в прошлое руками -> 404
+    let now = janitor::now_secs();
+    sqlx::query("UPDATE files SET expires_at = ?1 WHERE short_code = ?2")
+        .bind(now - 10)
+        .bind(&code)
+        .execute(&state.db)
+        .await
+        .unwrap();
+    let req = Request::builder()
+        .uri(format!("/{code}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+/// (b2) TTL-лимиты: 0 без allow_infinite -> 400; выше max_ttl_hours -> 400;
+/// blob после отказа не остаётся сиротой. Raw: X-TTL-Hours работает.
+#[tokio::test]
+async fn ttl_limits() {
+    let mut state = test_state("ttllim").await;
+    state.config.max_ttl_hours = 24;
+    let app = router(10 * 1024 * 1024).with_state(state.clone());
+
+    // ttl=0 без allow_infinite -> 400
+    let resp = app
+        .clone()
+        .oneshot(post_upload(&app, "XBOUND", multipart_body("XBOUND", "no-inf.txt", "x", Some(0))))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // ttl=25 > max 24 -> 400
+    let resp = app
+        .clone()
+        .oneshot(post_upload(&app, "XBOUND", multipart_body("XBOUND", "too-long.txt", "x", Some(25))))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // blob'ы от отказов убраны с диска (сирот не оставляем)
+    let (blobs,): (i64,) =
+        sqlx::query_as("SELECT count(*) FROM files WHERE orig_name IN ('no-inf.txt','too-long.txt')")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+    assert_eq!(blobs, 0, "строк в БД нет");
+
+    // raw с X-TTL-Hours: 2 -> ок, в БД ~2 часа запаса
+    let req = Request::builder()
+        .method("POST")
+        .uri("/upload")
+        .header("content-type", "application/octet-stream")
+        .header("x-filename", "rawttl.bin")
+        .header("x-ttl-hours", "2")
+        .body(Body::from("raw ttl"))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    let exp = json["expires_at"].as_i64().unwrap();
+    let (created,): (i64,) = sqlx::query_as(
+        "SELECT created_at FROM files WHERE short_code = ?1",
+    )
+    .bind(json["short_code"].as_str().unwrap())
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert!((exp - created - 7200).abs() < 5, "X-TTL-Hours=2 учтён");
+
+    // raw с X-TTL-Hours: 0 без флага -> 400
+    let req = Request::builder()
+        .method("POST")
+        .uri("/upload")
+        .header("content-type", "application/octet-stream")
+        .header("x-filename", "raw0.bin")
+        .header("x-ttl-hours", "0")
+        .body(Body::from("raw zero"))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
 /// (c) raw-режим (curl -T): octet-stream + X-Filename.
@@ -1529,6 +1700,66 @@ async fn static_route() {
     // /static без файла не матчится на /static/{file} — уходит в /{code},
     // где отсекается проверкой длины (6 != 7)
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+/// (l) GET /config.json — публичные параметры для фронта.
+#[tokio::test]
+async fn public_config_json() {
+    let mut state = test_state("cfg").await;
+    state.config.max_ttl_hours = 24;
+    state.config.allow_infinite_ttl = true;
+    state.config.tracking = true;
+    let app = router(10 * 1024 * 1024).with_state(state);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/config.json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert_eq!(json["max_ttl_hours"].as_u64().unwrap(), 24);
+    assert_eq!(json["allow_infinite_ttl"].as_bool().unwrap(), true);
+    assert_eq!(json["tracking"].as_bool().unwrap(), true);
+    assert_eq!(json["mode"].as_str().unwrap(), "free");
+    assert_eq!(json["max_file_size_mb"].as_u64().unwrap(), 10);
+    assert!(!json.as_object().unwrap().contains_key("listen"), "внутренние поля не светим");
+}
+
+/// (m) has_password в JSON создания: с паролем true, без — false.
+#[tokio::test]
+async fn has_password_flag() {
+    let state = test_state("pwflag").await;
+    let app = router(10 * 1024 * 1024).with_state(state);
+
+    // без пароля
+    let resp = app
+        .clone()
+        .oneshot(post_upload(&app, "XB", multipart_body("XB", "open.txt", "o", None)))
+        .await
+        .unwrap();
+    let json = json_body(resp).await;
+    assert_eq!(json["has_password"].as_bool().unwrap(), false);
+
+    // с паролем
+    let mut body = String::new();
+    body.push_str("--XB\r\n");
+    body.push_str("Content-Disposition: form-data; name=\"password\"\r\n\r\nsekret\r\n");
+    body.push_str("--XB\r\n");
+    body.push_str("Content-Disposition: form-data; name=\"file\"; filename=\"locked.txt\"\r\n");
+    body.push_str("Content-Type: text/plain\r\n\r\nlocked\r\n");
+    body.push_str("--XB--\r\n");
+    let resp = app
+        .clone()
+        .oneshot(post_upload(&app, "XB", body))
+        .await
+        .unwrap();
+    let json = json_body(resp).await;
+    assert_eq!(json["has_password"].as_bool().unwrap(), true);
 }
 
 /// (d) пароль: upload с password -> без пароля 401-страница, с X-Password 200,

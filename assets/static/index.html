@@ -103,7 +103,7 @@
 </style>
 </head>
 <body>
-<script>document.body.dataset.theme = localStorage.getItem('echodrop_theme') || 'auto';</script>
+<script>document.body.dataset.theme = localStorage.getItem('echodrop_theme') || 'dark';</script>
 <header>
   <h1><img src="/static/logo.svg" alt=""> echodrop</h1>
   <p data-i18n="tagline">уронил файл — забрал ссылку</p>
@@ -122,18 +122,15 @@
 
 <div id="controls">
   <label for="ttl" data-i18n="ttl_label">жизнь файла:</label>
-  <select id="ttl">
-    <option value="1" data-i18n="ttl_1">1 час</option>
-    <option value="24" selected data-i18n="ttl_24">1 день</option>
-    <option value="168" data-i18n="ttl_168">7 дней</option>
-    <option value="720" data-i18n="ttl_720">30 дней</option>
-  </select>
+  <select id="ttl"></select>
   <label for="pw" data-i18n="pw_label">пароль:</label>
   <input type="password" id="pw" placeholder="необязательно" autocomplete="off" data-i18n-ph="pw_ph">
 </div>
+<div id="state-line" class="hint"></div>
 
 <div id="files"></div>
 
+<div id="tracking-note" class="hint" hidden data-i18n="tracking_note">сервер фиксирует посещения (IP, время)</div>
 <footer data-i18n="footer">echodrop · файлы не индексируются и умирают сами</footer>
 
 <script>
@@ -170,7 +167,7 @@ function applyI18n() {
   if (lb) lb.textContent = LANG === 'ru' ? 'EN' : 'RU';
 }
 fetch('/static/i18n.json').then((r) => r.json()).then((d) => {
-  DICT = d; applyI18n();
+  DICT = d; applyI18n(); buildTtlOptions(); applyStateLine();
 }).catch(() => {});
 document.getElementById('langBtn').addEventListener('click', () => {
   LANG = LANG === 'ru' ? 'en' : 'ru';
@@ -178,13 +175,87 @@ document.getElementById('langBtn').addEventListener('click', () => {
   applyI18n();
 });
 
-// --- тема: auto -> dark -> light ---
+// --- конфиг сервера ---
+let CFG = null;
+fetch('/config.json').then((r) => r.json()).then((c) => {
+  CFG = c;
+  buildTtlOptions();
+  applyStateLine();
+  const tn = document.getElementById('tracking-note');
+  if (tn && c.tracking) tn.hidden = false;
+}).catch(() => { buildTtlOptions(); applyStateLine(); });
+
+function pluralRu(n, one, few, many) {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+  return many;
+}
+function humanTtl(h) {
+  if (h === 0) return t('forever', 'бессрочно');
+  const ru = LANG === 'ru';
+  if (h % 24 === 0) {
+    const d = h / 24;
+    return ru ? d + ' ' + pluralRu(d, 'день', 'дня', 'дней') : (d === 1 ? '1 day' : d + ' days');
+  }
+  return ru ? h + ' ' + pluralRu(h, 'час', 'часа', 'часов') : (h === 1 ? '1 hour' : h + ' hours');
+}
+function buildTtlOptions() {
+  const max = (CFG && CFG.max_ttl_hours) || 720;
+  const inf = !!(CFG && CFG.allow_infinite_ttl);
+  const def = (CFG && CFG.default_ttl_hours) || 24;
+  let opts = [1, 24, 168, 720].filter((h) => h <= max);
+  if (max > 720) opts.push(max);
+  if (inf) opts.push(0);
+  if (!opts.length) opts = [Math.max(1, Math.min(max, def))];
+  ttlSel.innerHTML = '';
+  opts.forEach((h) => {
+    const o = document.createElement('option');
+    o.value = String(h);
+    o.textContent = humanTtl(h);
+    ttlSel.appendChild(o);
+  });
+  let best = opts[0];
+  opts.forEach((h) => { if (h !== 0 && h <= def) best = h; });
+  if (def === 0 && inf) best = 0;
+  ttlSel.value = String(best);
+}
+function applyStateLine() {
+  const el = document.getElementById('state-line');
+  if (!el) return;
+  const h = parseInt(ttlSel.value, 10) || 0;
+  const tpl = (pwInput && pwInput.value)
+    ? t('state_protected', 'файлы, загруженные сейчас, будут жить {ttl} и защищены паролем на скачивание')
+    : t('state_open', 'файлы, загруженные сейчас, будут жить {ttl} и могут быть скачаны любым человеком по ссылке, без пароля');
+  el.textContent = tpl.replace('{ttl}', humanTtl(h));
+}
+ttlSel.addEventListener('change', applyStateLine);
+pwInput.addEventListener('input', applyStateLine);
+
+function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    return navigator.clipboard.writeText(text);
+  }
+  return new Promise((resolve, reject) => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy') ? resolve() : reject(new Error('copy failed')); }
+    catch (e) { reject(e); }
+    finally { ta.remove(); }
+  });
+}
+
+// --- тема: dark -> light -> auto ---
 const themeBtn = document.getElementById('themeBtn');
-const themeIcons = { auto: '🌓', dark: '🌙', light: '☀' };
-function curTheme() { return document.body.dataset.theme || 'auto'; }
-themeBtn.textContent = themeIcons[curTheme()] || '🌓';
+const themeIcons = { dark: '🌙', light: '☀', auto: '🌓' };
+function curTheme() { return document.body.dataset.theme || 'dark'; }
+themeBtn.textContent = themeIcons[curTheme()] || '🌙';
 themeBtn.addEventListener('click', () => {
-  const order = ['auto', 'dark', 'light'];
+  const order = ['dark', 'light', 'auto'];
   const next = order[(order.indexOf(curTheme()) + 1) % order.length];
   document.body.dataset.theme = next;
   localStorage.setItem('echodrop_theme', next);
@@ -244,16 +315,26 @@ function upload(file) {
           const btn = document.createElement('button');
           btn.className = 'copy'; btn.textContent = t('copy', 'копировать');
           btn.onclick = () => {
-            (navigator.clipboard ? navigator.clipboard.writeText(json.url) : Promise.reject())
-              .then(() => { btn.textContent = t('ok', 'ок'); setTimeout(() => btn.textContent = t('copy', 'копировать'), 1200); })
-              .catch(() => { prompt(json.url, json.url); });
+            copyText(json.url)
+              .then(() => { btn.textContent = t('ok', 'ок'); setTimeout(() => { btn.textContent = t('copy', 'копировать'); }, 1200); })
+              .catch(() => { window.prompt(t('copy_manual', 'скопируй вручную:'), json.url); });
           };
           const left = document.createElement('span');
           left.className = 'ttl-left';
-          const until = new Date((json.expires_at || 0) * 1000);
           const loc = LANG === 'ru' ? 'ru-RU' : 'en-GB';
-          left.textContent = t('until', 'до ') + until.toLocaleString(loc);
-          box.append(a, btn, left);
+          if (json.expires_at) {
+            left.textContent = t('until', 'до ') + new Date(json.expires_at * 1000).toLocaleString(loc);
+          } else {
+            left.textContent = t('forever', 'бессрочно');
+          }
+          if (json.has_password) {
+            const lock = document.createElement('span');
+            lock.className = 'ttl-left';
+            lock.textContent = '🔒 ' + t('locked', 'под паролем');
+            box.append(a, btn, left, lock);
+          } else {
+            box.append(a, btn, left);
+          }
           el.appendChild(box);
         } else {
           throw new Error(json.error || ('HTTP ' + xhr.status));

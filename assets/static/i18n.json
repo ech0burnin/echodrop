@@ -17,7 +17,17 @@
     "net_err": "сеть недоступна",
     "footer": "echodrop · файлы не индексируются и умирают сами",
     "byte": " Б",
-    "units": ["КБ", "МБ", "ГБ"]
+    "units": [
+      "КБ",
+      "МБ",
+      "ГБ"
+    ],
+    "forever": "бессрочно",
+    "locked": "под паролем",
+    "copy_manual": "скопируй вручную:",
+    "tracking_note": "сервер фиксирует посещения (IP, время) — требование владельца инстанса",
+    "state_protected": "файлы, загруженные сейчас, будут жить {ttl} и защищены паролем на скачивание",
+    "state_open": "файлы, загруженные сейчас, будут жить {ttl} и могут быть скачаны любым человеком по ссылке, без пароля"
   },
   "en": {
     "tagline": "drop a file — grab a link",
@@ -37,6 +47,16 @@
     "net_err": "network unavailable",
     "footer": "echodrop · files are not indexed and die on their own",
     "byte": " B",
-    "units": ["KB", "MB", "GB"]
+    "units": [
+      "KB",
+      "MB",
+      "GB"
+    ],
+    "forever": "forever",
+    "locked": "password-protected",
+    "copy_manual": "copy manually:",
+    "tracking_note": "this server logs visits (IP, time) — instance owner requirement",
+    "state_protected": "files uploaded now live for {ttl} and are password-protected on download",
+    "state_open": "files uploaded now live for {ttl} and can be downloaded by anyone with the link, no password"
   }
 }
