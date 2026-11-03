@@ -1,16 +1,25 @@
 /* echodrop — общие стили страниц (login/register/my/unlock).
-   Палитра как у index.html: bg #111, panel #181818, line #2a2a2a,
-   txt #eee, dim #888, accent #7aa2f7, err #f7768e. */
-:root {
+   Темы: dark (дефолт), light, auto (prefers-color-scheme). Тема ставится
+   JS-сниппетом на <body data-theme=...> (localStorage echodrop_theme). */
+body {
   --bg: #111; --panel: #181818; --line: #2a2a2a;
   --txt: #eee; --dim: #888; --accent: #7aa2f7; --err: #f7768e;
-}
-* { box-sizing: border-box; }
-body {
   background: var(--bg); color: var(--txt);
   font-family: system-ui, -apple-system, sans-serif;
   margin: 0;
 }
+body[data-theme='light'] {
+  --bg: #f5f5f5; --panel: #fff; --line: #ddd; --txt: #111; --dim: #666;
+}
+body[data-theme='auto'] {
+  --bg: #f5f5f5; --panel: #fff; --line: #ddd; --txt: #111; --dim: #666;
+}
+@media (prefers-color-scheme: dark) {
+  body[data-theme='auto'] {
+    --bg: #111; --panel: #181818; --line: #2a2a2a; --txt: #eee; --dim: #888;
+  }
+}
+* { box-sizing: border-box; }
 .wrap { max-width: 760px; margin: 40px auto; padding: 0 16px; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
@@ -19,10 +28,16 @@ header.site {
   display: flex; align-items: center; gap: 10px;
   margin-bottom: 4px;
 }
-header.site img { height: 28px; vertical-align: middle; }
+header.site img { height: 28px; vertical-align: middle; filter: invert(1); }
+body[data-theme='light'] header.site img { filter: none; }
+body[data-theme='auto'] header.site img { filter: none; }
+@media (prefers-color-scheme: dark) {
+  body[data-theme='auto'] header.site img { filter: invert(1); }
+}
 header.site h1 {
   margin: 0; font-weight: 600; letter-spacing: 2px; font-size: 24px;
 }
+header.site h1 img { height: 24px; vertical-align: middle; filter: inherit; }
 p.sub, .muted { color: var(--dim); font-size: 13px; }
 
 .panel {

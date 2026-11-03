@@ -1,0 +1,42 @@
+{
+  "ru": {
+    "tagline": "уронил файл — забрал ссылку",
+    "drop_hint": "Перетащи файлы сюда или кликни",
+    "drop_sub": "файлы живут ограниченное время, потом стираются",
+    "aria_upload": "Загрузить файлы",
+    "ttl_label": "жизнь файла:",
+    "ttl_1": "1 час",
+    "ttl_24": "1 день",
+    "ttl_168": "7 дней",
+    "ttl_720": "30 дней",
+    "pw_label": "пароль:",
+    "pw_ph": "необязательно",
+    "copy": "копировать",
+    "ok": "ок",
+    "until": "до ",
+    "net_err": "сеть недоступна",
+    "footer": "echodrop · файлы не индексируются и умирают сами",
+    "byte": " Б",
+    "units": ["КБ", "МБ", "ГБ"]
+  },
+  "en": {
+    "tagline": "drop a file — grab a link",
+    "drop_hint": "Drag files here or click",
+    "drop_sub": "files live for a limited time, then get erased",
+    "aria_upload": "Upload files",
+    "ttl_label": "file lifetime:",
+    "ttl_1": "1 hour",
+    "ttl_24": "1 day",
+    "ttl_168": "7 days",
+    "ttl_720": "30 days",
+    "pw_label": "password:",
+    "pw_ph": "optional",
+    "copy": "copy",
+    "ok": "ok",
+    "until": "until ",
+    "net_err": "network unavailable",
+    "footer": "echodrop · files are not indexed and die on their own",
+    "byte": " B",
+    "units": ["KB", "MB", "GB"]
+  }
+}

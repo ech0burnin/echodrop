@@ -1,29 +1,50 @@
 <!doctype html>
-<!-- echodrop dropzone: vanilla JS, без сборки. Тёмная тема, drag&drop,
-     мультизагрузка, прогресс, копирование ссылок. TTL-селектор -> ttl_hours. -->
+<!-- echodrop dropzone: vanilla JS, без сборки. Темы dark/light/auto (localStorage
+     echodrop_theme), i18n ru/en (localStorage echodrop_lang, словарь /static/i18n.json).
+     HTML-дефолты — русские, чтобы работало и без JS. -->
 <html lang="ru">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>echodrop</title>
 <style>
-  :root {
-    --bg: #111; --panel: #181818; --line: #2a2a2a; --txt: #eee; --dim: #888;
-    --accent: #7aa2f7; --ok: #9ece6a; --err: #f7768e;
-  }
-  * { box-sizing: border-box; }
-  html, body { height: 100%; margin: 0; }
   body {
+    --bg: #111; --panel: #181818; --line: #2a2a2a; --txt: #eee; --dim: #888;
+    --accent: #7aa2f7; --ok: #9ece6a; --err: #f7768e; --hover: #1a1f2e;
     background: var(--bg); color: var(--txt);
     font-family: system-ui, -apple-system, sans-serif;
     display: flex; flex-direction: column; align-items: center;
-    padding: 32px 16px; gap: 20px;
+    padding: 32px 16px; gap: 20px; margin: 0; min-height: 100vh;
   }
+  body[data-theme='light'] {
+    --bg: #f5f5f5; --panel: #fff; --line: #ddd; --txt: #111; --dim: #666; --hover: #e8eefc;
+  }
+  body[data-theme='auto'] {
+    --bg: #f5f5f5; --panel: #fff; --line: #ddd; --txt: #111; --dim: #666; --hover: #e8eefc;
+  }
+  @media (prefers-color-scheme: dark) {
+    body[data-theme='auto'] {
+      --bg: #111; --panel: #181818; --line: #2a2a2a; --txt: #eee; --dim: #888; --hover: #1a1f2e;
+    }
+  }
+  * { box-sizing: border-box; }
   header { text-align: center; }
   header h1 {
     margin: 0; font-weight: 600; letter-spacing: 3px; font-size: 28px;
   }
+  header h1 img { height: 28px; vertical-align: middle; filter: invert(1); }
+  body[data-theme='light'] header h1 img { filter: none; }
+  body[data-theme='auto'] header h1 img { filter: none; }
+  @media (prefers-color-scheme: dark) {
+    body[data-theme='auto'] header h1 img { filter: invert(1); }
+  }
   header p { margin: 6px 0 0; color: var(--dim); font-size: 14px; }
+  .switches { display: flex; gap: 8px; justify-content: center; margin-top: 10px; }
+  .switches button {
+    background: var(--panel); color: var(--txt); border: 1px solid var(--line);
+    border-radius: 8px; padding: 4px 10px; font-size: 12px; cursor: pointer;
+  }
+  .switches button:hover { border-color: var(--accent); }
 
   #dropzone {
     width: 100%; max-width: 560px;
@@ -31,7 +52,7 @@
     padding: 48px 24px; text-align: center; cursor: pointer;
     transition: border-color .15s, background .15s;
   }
-  #dropzone.hover { border-color: var(--accent); background: #1a1f2e; }
+  #dropzone.hover { border-color: var(--accent); background: var(--hover); }
   #dropzone .big { font-size: 40px; margin-bottom: 8px; }
   #dropzone .hint { color: var(--dim); font-size: 13px; margin-top: 10px; }
 
@@ -39,10 +60,11 @@
     display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
     justify-content: center; font-size: 14px; color: var(--dim);
   }
-  select {
+  select, #pw {
     background: var(--panel); color: var(--txt); border: 1px solid var(--line);
     border-radius: 8px; padding: 6px 10px; font-size: 14px;
   }
+  #pw { width: 120px; }
 
   #files { width: 100%; max-width: 560px; display: flex; flex-direction: column; gap: 10px; }
   .row {
@@ -81,34 +103,38 @@
 </style>
 </head>
 <body>
+<script>document.body.dataset.theme = localStorage.getItem('echodrop_theme') || 'auto';</script>
 <header>
-  <h1><img src="/static/logo.svg" alt="" style="height:28px;vertical-align:middle;filter:invert(1)"> echodrop</h1>
-  <p>уронил файл — забрал ссылку</p>
+  <h1><img src="/static/logo.svg" alt=""> echodrop</h1>
+  <p data-i18n="tagline">уронил файл — забрал ссылку</p>
+  <div class="switches">
+    <button id="themeBtn" title="theme">🌓</button>
+    <button id="langBtn">EN</button>
+  </div>
 </header>
 
-<div id="dropzone" role="button" tabindex="0" aria-label="Загрузить файлы">
+<div id="dropzone" role="button" tabindex="0" aria-label="Загрузить файлы" data-i18n-aria="aria_upload">
   <div class="big">⬇</div>
-  <div>Перетащи файлы сюда или кликни</div>
-  <div class="hint">файлы живут ограниченное время, потом стираются</div>
+  <div data-i18n="drop_hint">Перетащи файлы сюда или кликни</div>
+  <div class="hint" data-i18n="drop_sub">файлы живут ограниченное время, потом стираются</div>
 </div>
 <input type="file" id="picker" multiple hidden>
 
 <div id="controls">
-  <label for="ttl">жизнь файла:</label>
+  <label for="ttl" data-i18n="ttl_label">жизнь файла:</label>
   <select id="ttl">
-    <option value="1">1 час</option>
-    <option value="24" selected>1 день</option>
-    <option value="168">7 дней</option>
-    <option value="720">30 дней</option>
+    <option value="1" data-i18n="ttl_1">1 час</option>
+    <option value="24" selected data-i18n="ttl_24">1 день</option>
+    <option value="168" data-i18n="ttl_168">7 дней</option>
+    <option value="720" data-i18n="ttl_720">30 дней</option>
   </select>
-  <label for="pw">пароль:</label>
-  <input type="password" id="pw" placeholder="необязательно" autocomplete="off"
-         style="background:#181818;color:#eee;border:1px solid #2a2a2a;border-radius:8px;padding:6px 10px;font-size:14px;width:120px">
+  <label for="pw" data-i18n="pw_label">пароль:</label>
+  <input type="password" id="pw" placeholder="необязательно" autocomplete="off" data-i18n-ph="pw_ph">
 </div>
 
 <div id="files"></div>
 
-<footer>echodrop · файлы не индексируются и умирают сами</footer>
+<footer data-i18n="footer">echodrop · файлы не индексируются и умирают сами</footer>
 
 <script>
 'use strict';
@@ -118,12 +144,61 @@ const ttlSel = document.getElementById('ttl');
 const pwInput = document.getElementById('pw');
 const list = document.getElementById('files');
 
+// --- i18n ---
+let LANG = localStorage.getItem('echodrop_lang') ||
+  ((navigator.language || '').toLowerCase().startsWith('ru') ? 'ru' : 'en');
+let DICT = null;
+function t(k, fallback) {
+  if (DICT && DICT[LANG] && DICT[LANG][k] !== undefined) return DICT[LANG][k];
+  return fallback;
+}
+function applyI18n() {
+  document.querySelectorAll('[data-i18n]').forEach((el) => {
+    const v = t(el.dataset.i18n, el.textContent);
+    if (v) el.textContent = v;
+  });
+  document.querySelectorAll('[data-i18n-ph]').forEach((el) => {
+    const v = t(el.dataset.i18nPh, el.placeholder);
+    if (v !== undefined) el.placeholder = v;
+  });
+  document.querySelectorAll('[data-i18n-aria]').forEach((el) => {
+    const v = t(el.dataset.i18nAria, el.getAttribute('aria-label'));
+    if (v) el.setAttribute('aria-label', v);
+  });
+  document.documentElement.lang = LANG;
+  const lb = document.getElementById('langBtn');
+  if (lb) lb.textContent = LANG === 'ru' ? 'EN' : 'RU';
+}
+fetch('/static/i18n.json').then((r) => r.json()).then((d) => {
+  DICT = d; applyI18n();
+}).catch(() => {});
+document.getElementById('langBtn').addEventListener('click', () => {
+  LANG = LANG === 'ru' ? 'en' : 'ru';
+  localStorage.setItem('echodrop_lang', LANG);
+  applyI18n();
+});
+
+// --- тема: auto -> dark -> light ---
+const themeBtn = document.getElementById('themeBtn');
+const themeIcons = { auto: '🌓', dark: '🌙', light: '☀' };
+function curTheme() { return document.body.dataset.theme || 'auto'; }
+themeBtn.textContent = themeIcons[curTheme()] || '🌓';
+themeBtn.addEventListener('click', () => {
+  const order = ['auto', 'dark', 'light'];
+  const next = order[(order.indexOf(curTheme()) + 1) % order.length];
+  document.body.dataset.theme = next;
+  localStorage.setItem('echodrop_theme', next);
+  themeBtn.textContent = themeIcons[next];
+});
+
+// --- загрузка ---
 // Загрузка строго по одному: спокойнее и серверу, и прогресс-барам.
 let chain = Promise.resolve();
 
 function humanSize(n) {
-  if (n < 1024) return n + ' Б';
-  const units = ['КБ', 'МБ', 'ГБ'];
+  const byteWord = t('byte', ' Б');
+  const units = (DICT && DICT[LANG] && DICT[LANG].units) || ['КБ', 'МБ', 'ГБ'];
+  if (n < 1024) return n + byteWord;
   let i = -1;
   do { n /= 1024; i++; } while (n >= 1024 && i < units.length - 1);
   return n.toFixed(n >= 10 ? 0 : 1) + ' ' + units[i];
@@ -167,16 +242,17 @@ function upload(file) {
           const a = document.createElement('a');
           a.href = json.url; a.textContent = json.url;
           const btn = document.createElement('button');
-          btn.className = 'copy'; btn.textContent = 'копировать';
+          btn.className = 'copy'; btn.textContent = t('copy', 'копировать');
           btn.onclick = () => {
             (navigator.clipboard ? navigator.clipboard.writeText(json.url) : Promise.reject())
-              .then(() => { btn.textContent = 'ок'; setTimeout(() => btn.textContent = 'копировать', 1200); })
-              .catch(() => { prompt('Скопируй вручную:', json.url); });
+              .then(() => { btn.textContent = t('ok', 'ок'); setTimeout(() => btn.textContent = t('copy', 'копировать'), 1200); })
+              .catch(() => { prompt(json.url, json.url); });
           };
           const left = document.createElement('span');
           left.className = 'ttl-left';
           const until = new Date((json.expires_at || 0) * 1000);
-          left.textContent = 'до ' + until.toLocaleString('ru-RU');
+          const loc = LANG === 'ru' ? 'ru-RU' : 'en-GB';
+          left.textContent = t('until', 'до ') + until.toLocaleString(loc);
           box.append(a, btn, left);
           el.appendChild(box);
         } else {
@@ -197,7 +273,7 @@ function upload(file) {
       fill.style.width = '100%';
       const e = document.createElement('div');
       e.className = 'err';
-      e.textContent = 'сеть недоступна';
+      e.textContent = t('net_err', 'сеть недоступна');
       el.appendChild(e);
       resolve();
     };

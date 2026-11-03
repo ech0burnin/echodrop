@@ -91,6 +91,8 @@ async fn static_file(axum::extract::Path(file): axum::extract::Path<String>) -> 
         "png" => "image/png",
         "ico" => "image/x-icon",
         "js" => "text/javascript; charset=utf-8",
+        "json" => "application/json; charset=utf-8",
+        "html" => "text/html; charset=utf-8",
         "txt" => "text/plain; charset=utf-8",
         _ => "application/octet-stream",
     };
@@ -581,8 +583,10 @@ fn page_shell(title: &str, body: &str) -> Html<String> {
         r#"<!doctype html><html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>{title}</title>
 <link rel="stylesheet" href="/static/style.css">
-</head><body><div class="wrap">
-<header class="site"><img src="/static/logo.svg" alt="" style="filter:invert(1)"><h1>echodrop</h1></header>
+</head><body>
+<script>document.body.dataset.theme = localStorage.getItem('echodrop_theme') || 'auto';</script>
+<div class="wrap">
+<header class="site"><img src="/static/logo.svg" alt=""><h1>echodrop</h1></header>
 {body}</div></body></html>"#
     ))
 }
@@ -590,7 +594,7 @@ fn page_shell(title: &str, body: &str) -> Html<String> {
 /// Шапка для страниц кабинета: лого + название + ссылка logout.
 fn site_header(extra: &str) -> String {
     format!(
-        r#"<div class="row"><header class="site"><img src="/static/logo.svg" alt="" style="filter:invert(1)"><h1>echodrop</h1></header><span class="muted">{extra}</span></div>"#
+        r#"<div class="row"><header class="site"><img src="/static/logo.svg" alt=""><h1>echodrop</h1></header><span class="muted">{extra}</span></div>"#
     )
 }
 
