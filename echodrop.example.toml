@@ -1,0 +1,32 @@
+# echodrop — пример конфигурации.
+# Скопируй в echodrop.toml (cp echodrop.example.toml echodrop.toml) и правь под себя.
+# Любое поле можно опустить — подставится дефолт, указанный в комментарии.
+# Переменные окружения (ECHODROP_MODE, ECHODROP_LISTEN, ECHODROP_PORT, ECHODROP_STORAGE_PATH,
+# ECHODROP_MAX_FILE_SIZE_MB, ECHODROP_DEFAULT_TTL_HOURS, ECHODROP_SITE_NAME, ECHODROP_BASE_URL)
+# бьют приоритетом над этим файлом — удобно для systemd/docker.
+
+# Режим работы (дефолт: free):
+#   free   — только дропзона, без личных кабинетов
+#   open   — свободная регистрация пользователей
+#   closed — регистрация закрыта, вход только существующих
+mode = "free"
+
+# Адрес, который слушает сервер: ip:port (дефолт: 0.0.0.0:8080).
+# Порт можно переопределить отдельно переменной ECHODROP_PORT — IP сохранится.
+listen = "0.0.0.0:8080"
+
+# Каталог для загруженных файлов (дефолт: ./data, создаётся при старте).
+storage_path = "./data"
+
+# Максимальный размер файла в мегабайтах; больше — 413 (дефолт: 100).
+max_file_size_mb = 100
+
+# Время жизни файла по умолчанию в часах (дефолт: 168 = 7 суток).
+default_ttl_hours = 168
+
+# Название сайта: шапка страниц и <title> (дефолт: echodrop).
+site_name = "echodrop"
+
+# Публичный адрес сайта — из него строятся короткие ссылки на файлы
+# (дефолт: http://localhost:8080; в проде https://files.example.com).
+base_url = "http://localhost:8080"

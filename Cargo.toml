@@ -1,0 +1,37 @@
+[package]
+name = "echodrop"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Веб-фреймворк: роуты, экстракторы, multipart-загрузка, сервер
+axum = { version = "0.8", features = ["multipart"] }
+# Асинхронный рантайм: full = все фичи (rt-multi-thread, macros, net, fs...)
+tokio = { version = "1", features = ["full"] }
+# Сериализация: конфиг из TOML, JSON-ответы API
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+# middleware: TraceLayer (логи запросов), ServeDir не нужен — статику отдаёт rust-embed
+tower-http = { version = "0.6", features = ["fs", "trace"] }
+# Встраивание статики в бинарь: assets/ попадают в исполняемый файл
+rust-embed = { version = "8", features = ["axum"] }
+# БД: SQLite через sqlx. runtime-запросы (без macros) — не нужен sqlx-cli
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+# Хэширование контента: sha256 — имя блоба на диске (дедупликация бесплатно)
+sha2 = "0.10"
+# Генерация коротких кодов base62
+rand = "0.8"
+# ReaderStream: отдача файла стримом из tokio::fs::File
+tokio-util = { version = "0.7", features = ["io"] }
+# BodyExt::frame — чтение raw-тела по кадрам (curl -T)
+http-body-util = "0.1"
+
+# Хэширование паролей файлов (argon2 тяжёлый, bcrypt достаточно)
+bcrypt = "0.15"
+# Cookie-токены разблокировки: HMAC-SHA256 от кода файла
+hmac = "0.12"
+
+[dev-dependencies]
+# oneshot-тесты роутера без реального сокета
+tower = { version = "0.5", features = ["util"] }

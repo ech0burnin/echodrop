@@ -1,0 +1,17 @@
+/target
+/data
+*.db
+*.db-shm
+*.db-wal
+.env
+
+
+# Added by cargo
+#
+# already existing elements were commented out
+
+#/target
+
+# echo internals
+.echo-tasks/
+.echo-progress.md
