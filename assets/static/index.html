@@ -27,6 +27,8 @@
   header h1 img { height: 28px; vertical-align: middle; filter: invert(1); }
   body[data-theme='light'] header h1 img { filter: none; }
   header p { margin: 6px 0 0; color: var(--dim); font-size: 14px; }
+  header nav { margin-top: 10px; display: flex; gap: 16px; justify-content: center; }
+  header nav a { color: var(--dim); text-decoration: underline; font-size: 14px; }
   .switches { display: flex; gap: 8px; justify-content: center; margin-top: 10px; }
   .switches button {
     background: var(--panel); color: var(--txt); border: 1px solid var(--line);
@@ -95,6 +97,10 @@
 <header>
   <h1><img src="/static/logo.svg" alt=""> echodrop</h1>
   <p data-i18n="tagline">уронил файл — забрал ссылку</p>
+  <nav id="authNav" hidden>
+    <a href="/login" data-i18n="nav_login">войти</a>
+    <a href="/register" data-i18n="nav_register">зарегистрироваться</a>
+  </nav>
   <div class="switches">
     <button id="themeBtn" title="theme">🌙</button>
     <button id="langBtn">RU</button>
@@ -179,6 +185,8 @@ fetch('/config.json').then((r) => r.json()).then((c) => {
   applyStateLine();
   const tn = document.getElementById('tracking-note');
   if (tn && c.tracking) tn.hidden = false;
+  const nav = document.getElementById('authNav');
+  if (nav) nav.hidden = !(c.mode === 'open');
 }).catch(() => { buildTtlOptions(); applyStateLine(); });
 
 function pluralRu(n, one, few, many) {

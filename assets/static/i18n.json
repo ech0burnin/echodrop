@@ -27,7 +27,9 @@
     "copy_manual": "скопируй вручную:",
     "tracking_note": "сервер фиксирует посещения (IP, время) — требование владельца инстанса",
     "state_protected": "файлы, загруженные сейчас, будут жить {ttl} и защищены паролем на скачивание",
-    "state_open": "файлы, загруженные сейчас, будут жить {ttl} и могут быть скачаны любым человеком по ссылке, без пароля"
+    "state_open": "файлы, загруженные сейчас, будут жить {ttl} и могут быть скачаны любым человеком по ссылке, без пароля",
+    "nav_login": "войти",
+    "nav_register": "зарегистрироваться"
   },
   "en": {
     "tagline": "drop a file — grab a link",
@@ -57,6 +59,8 @@
     "copy_manual": "copy manually:",
     "tracking_note": "this server logs visits (IP, time) — instance owner requirement",
     "state_protected": "files uploaded now live for {ttl} and are password-protected on download",
-    "state_open": "files uploaded now live for {ttl} and can be downloaded by anyone with the link, no password"
+    "state_open": "files uploaded now live for {ttl} and can be downloaded by anyone with the link, no password",
+    "nav_login": "sign in",
+    "nav_register": "sign up"
   }
 }
