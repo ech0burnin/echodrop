@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- echodrop dropzone: vanilla JS, без сборки. Темы dark/light/auto (localStorage
+<!-- echodrop dropzone: vanilla JS, без сборки. Темы dark/light (localStorage
      echodrop_theme), i18n ru/en (localStorage echodrop_lang, словарь /static/i18n.json).
      HTML-дефолты — русские, чтобы работало и без JS. -->
 <html lang="ru">
@@ -19,14 +19,6 @@
   body[data-theme='light'] {
     --bg: #f5f5f5; --panel: #fff; --line: #ddd; --txt: #111; --dim: #666; --hover: #e8eefc;
   }
-  body[data-theme='auto'] {
-    --bg: #f5f5f5; --panel: #fff; --line: #ddd; --txt: #111; --dim: #666; --hover: #e8eefc;
-  }
-  @media (prefers-color-scheme: dark) {
-    body[data-theme='auto'] {
-      --bg: #111; --panel: #181818; --line: #2a2a2a; --txt: #eee; --dim: #888; --hover: #1a1f2e;
-    }
-  }
   * { box-sizing: border-box; }
   header { text-align: center; }
   header h1 {
@@ -34,10 +26,6 @@
   }
   header h1 img { height: 28px; vertical-align: middle; filter: invert(1); }
   body[data-theme='light'] header h1 img { filter: none; }
-  body[data-theme='auto'] header h1 img { filter: none; }
-  @media (prefers-color-scheme: dark) {
-    body[data-theme='auto'] header h1 img { filter: invert(1); }
-  }
   header p { margin: 6px 0 0; color: var(--dim); font-size: 14px; }
   .switches { display: flex; gap: 8px; justify-content: center; margin-top: 10px; }
   .switches button {
@@ -103,13 +91,13 @@
 </style>
 </head>
 <body>
-<script>document.body.dataset.theme = localStorage.getItem('echodrop_theme') || 'dark';</script>
+<script>document.body.dataset.theme = localStorage.getItem('echodrop_theme') === 'light' ? 'light' : 'dark';</script>
 <header>
   <h1><img src="/static/logo.svg" alt=""> echodrop</h1>
   <p data-i18n="tagline">уронил файл — забрал ссылку</p>
   <div class="switches">
-    <button id="themeBtn" title="theme">🌓</button>
-    <button id="langBtn">EN</button>
+    <button id="themeBtn" title="theme">🌙</button>
+    <button id="langBtn">RU</button>
   </div>
 </header>
 
@@ -164,7 +152,7 @@ function applyI18n() {
   });
   document.documentElement.lang = LANG;
   const lb = document.getElementById('langBtn');
-  if (lb) lb.textContent = LANG === 'ru' ? 'EN' : 'RU';
+  if (lb) lb.textContent = LANG.toUpperCase();
 }
 fetch('/static/i18n.json').then((r) => r.json()).then((d) => {
   DICT = d; applyI18n(); buildTtlOptions(); applyStateLine();
@@ -172,7 +160,15 @@ fetch('/static/i18n.json').then((r) => r.json()).then((d) => {
 document.getElementById('langBtn').addEventListener('click', () => {
   LANG = LANG === 'ru' ? 'en' : 'ru';
   localStorage.setItem('echodrop_lang', LANG);
+  // перерисовка живых подписей и опций TTL на новом языке,
+  // выбранный TTL сохраняем, если он есть в новом списке
+  const keepTtl = ttlSel.value;
   applyI18n();
+  buildTtlOptions();
+  if (keepTtl && Array.from(ttlSel.options).some((o) => o.value === keepTtl)) {
+    ttlSel.value = keepTtl;
+  }
+  applyStateLine();
 });
 
 // --- конфиг сервера ---
@@ -249,17 +245,16 @@ function copyText(text) {
   });
 }
 
-// --- тема: dark -> light -> auto ---
+// --- тема: dark <-> light (бинарная; в localStorage мог остаться auto со старых версий) ---
 const themeBtn = document.getElementById('themeBtn');
-const themeIcons = { dark: '🌙', light: '☀', auto: '🌓' };
-function curTheme() { return document.body.dataset.theme || 'dark'; }
-themeBtn.textContent = themeIcons[curTheme()] || '🌙';
+function curTheme() { return document.body.dataset.theme === 'light' ? 'light' : 'dark'; }
+function setThemeIcon() { themeBtn.textContent = curTheme() === 'dark' ? '🌙' : '☀'; }
+setThemeIcon();
 themeBtn.addEventListener('click', () => {
-  const order = ['dark', 'light', 'auto'];
-  const next = order[(order.indexOf(curTheme()) + 1) % order.length];
+  const next = curTheme() === 'dark' ? 'light' : 'dark';
   document.body.dataset.theme = next;
   localStorage.setItem('echodrop_theme', next);
-  themeBtn.textContent = themeIcons[next];
+  setThemeIcon();
 });
 
 // --- загрузка ---
