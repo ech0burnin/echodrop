@@ -1,0 +1,67 @@
+/* echodrop — общие стили страниц (login/register/my/unlock).
+   Палитра как у index.html: bg #111, panel #181818, line #2a2a2a,
+   txt #eee, dim #888, accent #7aa2f7, err #f7768e. */
+:root {
+  --bg: #111; --panel: #181818; --line: #2a2a2a;
+  --txt: #eee; --dim: #888; --accent: #7aa2f7; --err: #f7768e;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--txt);
+  font-family: system-ui, -apple-system, sans-serif;
+  margin: 0;
+}
+.wrap { max-width: 760px; margin: 40px auto; padding: 0 16px; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+header.site {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 4px;
+}
+header.site img { height: 28px; vertical-align: middle; }
+header.site h1 {
+  margin: 0; font-weight: 600; letter-spacing: 2px; font-size: 24px;
+}
+p.sub, .muted { color: var(--dim); font-size: 13px; }
+
+.panel {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 14px; padding: 20px; margin-bottom: 12px;
+}
+.row {
+  display: flex; gap: 12px; align-items: center;
+  justify-content: space-between; flex-wrap: wrap;
+}
+
+input, select {
+  background: var(--bg); color: var(--txt);
+  border: 1px solid var(--line); border-radius: 8px;
+  padding: 10px 12px; font-size: 15px; width: 100%;
+}
+form.panel input { width: 100%; }
+
+button {
+  background: var(--accent); color: #111;
+  border: 0; border-radius: 8px; padding: 10px 18px;
+  font-size: 15px; font-weight: 600; cursor: pointer;
+}
+button:hover { filter: brightness(1.1); }
+button.danger { background: var(--err); }
+
+.err { color: var(--err); font-size: 13px; }
+
+table {
+  width: 100%; border-collapse: collapse;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 14px; overflow: hidden;
+  font-size: 14px;
+}
+th, td {
+  text-align: left; padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+}
+tr:last-child td { border-bottom: 0; }
+th { color: var(--dim); font-weight: 500; font-size: 12px;
+     text-transform: uppercase; letter-spacing: .5px; }
+td .muted { font-size: 12px; }

@@ -46,6 +46,7 @@ pub fn router(max_upload_bytes: usize) -> Router<AppState> {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/", get(index))
+        .route("/static/{file}", get(static_file))
         .route("/upload", axum::routing::post(upload).put(upload))
         .route("/{code}/unlock", axum::routing::post(unlock))
         .route("/login", get(login_page).post(login_submit))
@@ -72,6 +73,32 @@ async fn index() -> Response {
         )
             .into_response(),
     }
+}
+
+/// GET /static/{file} — файл из embedded assets (лого, общие стили страниц).
+/// index.html наружу не отдаём: он живёт на `/`.
+async fn static_file(axum::extract::Path(file): axum::extract::Path<String>) -> Response {
+    // только простые имена: без слэшей и точек-в-начале (index.html отсекается сам)
+    if file.contains('/') || file.contains('\\') || file.starts_with('.') {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    }
+    let Some(asset) = Assets::get(&file) else {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    };
+    let ct = match file.rsplit('.').next().unwrap_or("") {
+        "svg" => "image/svg+xml",
+        "css" => "text/css; charset=utf-8",
+        "png" => "image/png",
+        "ico" => "image/x-icon",
+        "js" => "text/javascript; charset=utf-8",
+        "txt" => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    };
+    (
+        [(header::CONTENT_TYPE, HeaderValue::from_static(ct))],
+        asset.data.into_owned(),
+    )
+        .into_response()
 }
 
 fn bad_request(msg: impl std::fmt::Display) -> Response {
@@ -438,8 +465,8 @@ async fn register_page(State(state): State<AppState>) -> Response {
     let a = rand_int(2, 9);
     let b = rand_int(2, 9);
     let body = format!(
-        r#"<h1 style="letter-spacing:2px">echodrop</h1><p class="muted">регистрация</p>
-<form method="post" action="/register">
+        r#"<p class="muted">регистрация</p>
+<form method="post" action="/register" class="panel">
   <p><input name="login" placeholder="логин (3-30, a-z0-9_-)" required autofocus></p>
   <p><input type="password" name="password" placeholder="пароль (6+)" required></p>
   <p class="muted">сколько будет {a} + {b}?</p>
@@ -547,23 +574,24 @@ fn current_user(state: &AppState, headers: &HeaderMap) -> Option<String> {
 }
 
 /// Общий каркас HTML-страниц ЛК (тёмная тема, как у дропзоны).
+/// Общая обёртка HTML-страниц кабинета: подключает /static/style.css,
+/// шапка = лого + echodrop, тело — конкретная страница.
 fn page_shell(title: &str, body: &str) -> Html<String> {
     Html(format!(
         r#"<!doctype html><html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>{title}</title>
-<style>
- body {{ background:#111;color:#eee;font-family:system-ui,sans-serif;margin:0; }}
- .wrap {{ max-width:760px;margin:40px auto;padding:0 16px; }}
- a {{ color:#7aa2f7;text-decoration:none; }}
- .card {{ background:#181818;border:1px solid #2a2a2a;border-radius:14px;padding:20px;margin-bottom:12px; }}
- input {{ background:#111;color:#eee;border:1px solid #2a2a2a;border-radius:8px;padding:10px 12px;font-size:15px; }}
- button {{ background:#7aa2f7;color:#111;border:0;border-radius:8px;padding:10px 18px;font-size:15px;font-weight:600;cursor:pointer; }}
- button.danger {{ background:#f7768e; }}
- .muted {{ color:#888;font-size:13px; }}
- .row {{ display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap; }}
- .err {{ color:#f7768e;font-size:13px; }}
-</style></head><body><div class="wrap">{body}</div></body></html>"#
+<link rel="stylesheet" href="/static/style.css">
+</head><body><div class="wrap">
+<header class="site"><img src="/static/logo.svg" alt="" style="filter:invert(1)"><h1>echodrop</h1></header>
+{body}</div></body></html>"#
     ))
+}
+
+/// Шапка для страниц кабинета: лого + название + ссылка logout.
+fn site_header(extra: &str) -> String {
+    format!(
+        r#"<div class="row"><header class="site"><img src="/static/logo.svg" alt="" style="filter:invert(1)"><h1>echodrop</h1></header><span class="muted">{extra}</span></div>"#
+    )
 }
 
 /// GET /login — форма входа.
@@ -573,8 +601,8 @@ async fn login_page(State(state): State<AppState>) -> Response {
     }
     page_shell(
         "echodrop — вход",
-        r#"<h1 style="letter-spacing:2px">echodrop</h1><p class="muted">вход в кабинет</p>
-<form method="post" action="/login">
+        r#"<p class="muted">вход в кабинет</p>
+<form method="post" action="/login" class="panel">
   <p><input name="login" placeholder="логин" required autofocus></p>
   <p><input type="password" name="password" placeholder="пароль" required></p>
   <p class="err" id="err"></p>
@@ -671,7 +699,7 @@ async fn my_page(State(state): State<AppState>, headers: HeaderMap) -> Response 
         let expired = expires_at <= now;
         let status = if expired { "истёк" } else { "жив" };
         let card = format!(
-            r#"<div class="card"><div class="row">
+            r#"<div class="panel"><div class="row">
   <div><b>{name}</b> <span class="muted">({})</span><br>
   <span class="muted">{code} · {} · {} · скачали {downloads} раз · {status}</span></div>
   <form method="post" action="/my/del/{id}" style="margin:0">
@@ -688,9 +716,11 @@ async fn my_page(State(state): State<AppState>, headers: HeaderMap) -> Response 
         cards = "<p class='muted'>пока ничего не загружено</p>".into();
     }
     let body = format!(
-        r#"<div class="row"><h1 style="letter-spacing:2px">echodrop</h1>
-<span class="muted">{login} · <a href="/">загрузить</a> · <a href="/logout">выйти</a></span></div>
-{cards}"#
+        r#"{}"
+{cards}"#,
+        site_header(&format!(
+            "{login} · <a href=\"/\">загрузить</a> · <a href=\"/logout\">выйти</a>"
+        ))
     );
     page_shell("echodrop — кабинет", &body).into_response()
 }
@@ -1420,6 +1450,81 @@ async fn tracking_events() {
     let no_table: Result<Vec<(i64,)>, _> =
         sqlx::query_as("SELECT count(*) FROM events").fetch_all(&state2.db).await;
     assert!(no_table.is_err(), "таблицы events нет при tracking=false");
+}
+
+/// (k) Ф4-1: статика из embedded assets: лого 200 + content-type,
+/// неизвестное имя 404, /static/* не конфликтует с короткими ссылками /{code}.
+#[tokio::test]
+async fn static_route() {
+    let state = test_state("st").await;
+    let app = router(10 * 1024 * 1024).with_state(state);
+
+    // /static/logo.svg -> 200, image/svg+xml
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/static/logo.svg")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let ct = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    assert_eq!(ct, "image/svg+xml");
+
+    // /static/style.css -> 200, text/css
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/static/style.css")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let ct = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    assert_eq!(ct, "text/css; charset=utf-8");
+
+    // неизвестное имя -> 404
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/static/nope.css")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    // короткая ссылка /{code} жива: /static — не код (длина 6), но проверим соседний шейп
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/static")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    // /static без файла не матчится на /static/{file} — уходит в /{code},
+    // где отсекается проверкой длины (6 != 7)
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
 /// (d) пароль: upload с password -> без пароля 401-страница, с X-Password 200,

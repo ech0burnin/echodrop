@@ -82,7 +82,7 @@
 </head>
 <body>
 <header>
-  <h1>echodrop</h1>
+  <h1><img src="/static/logo.svg" alt="" style="height:28px;vertical-align:middle;filter:invert(1)"> echodrop</h1>
   <p>уронил файл — забрал ссылку</p>
 </header>
 
@@ -115,6 +115,7 @@
 const dz = document.getElementById('dropzone');
 const picker = document.getElementById('picker');
 const ttlSel = document.getElementById('ttl');
+const pwInput = document.getElementById('pw');
 const list = document.getElementById('files');
 
 // Загрузка строго по одному: спокойнее и серверу, и прогресс-барам.
@@ -147,6 +148,8 @@ function upload(file) {
   return new Promise((resolve) => {
     const fd = new FormData();
     fd.append('ttl_hours', ttlSel.value);
+    // пароль ДО 'file': поле file завершает приём multipart на сервере
+    if (pwInput && pwInput.value) fd.append('password', pwInput.value);
     fd.append('file', file, file.name);
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/upload');
