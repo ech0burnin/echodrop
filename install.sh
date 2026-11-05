@@ -34,6 +34,7 @@ After=network.target
 
 [Service]
 EnvironmentFile=$ENVF
+WorkingDirectory=$DIR
 ExecStart=$BIN
 Restart=on-failure
 
