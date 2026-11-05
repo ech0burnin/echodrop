@@ -1,0 +1,14 @@
+# Пример systemd-юнита для системной установки (sudo),
+# если не хотите user-юнит из install.sh:
+[Unit]
+Description=echodrop file sharing
+After=network.target
+
+[Service]
+User=echodrop
+EnvironmentFile=/etc/echodrop/echodrop.env
+ExecStart=/usr/local/bin/echodrop
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

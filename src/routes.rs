@@ -12,7 +12,7 @@ use crate::storage::{self, BlobWriter, StoredBlob};
 use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, FromRequest, Multipart, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
-use axum::response::{Html, IntoResponse, Json, Response};
+use axum::response::{Html, IntoResponse, Json, Redirect, Response};
 use axum::routing::get;
 use axum::Router;
 
@@ -50,6 +50,9 @@ pub fn router(max_upload_bytes: usize) -> Router<AppState> {
         .route("/static/{file}", get(static_file))
         .route("/upload", axum::routing::post(upload).put(upload))
         .route("/{code}/unlock", axum::routing::post(unlock))
+        .route("/api/me", get(api_me))
+        .route("/api/captcha", get(api_captcha))
+        .route("/api/my-files", get(api_my_files))
         .route("/login", get(login_page).post(login_submit))
         .route("/logout", get(logout))
         .route("/register", get(register_page).post(register_submit))
@@ -79,8 +82,85 @@ async fn public_config(State(state): State<AppState>) -> Response {
         "allow_infinite_ttl": state.config.allow_infinite_ttl,
         "tracking": state.config.tracking,
         "base_url": state.config.base_url,
+        "registration_required": !state.config.allow_unreg_upload && state.config.mode != crate::config::Mode::Free,
+        "reg_token_required": state.config.registration_token.is_some(),
+        "storage_limit_gb": state.config.storage_limit_gb,
+        "storage_used_bytes": storage_used(&state).await,
     }))
     .into_response()
+}
+
+/// Сколько байт занято в хранилище (data + blobs). Ошибки чтения = 0.
+async fn storage_used(state: &AppState) -> u64 {
+    let mut total: u64 = 0;
+    for sub in ["data", "blobs"] {
+        let dir = std::path::Path::new(&state.config.storage_path).join(sub);
+        let Ok(mut rd) = tokio::fs::read_dir(&dir).await else { continue };
+        while let Ok(Some(e)) = rd.next_entry().await {
+            if let Ok(md) = e.metadata().await {
+                if md.is_file() {
+                    total += md.len();
+                }
+            }
+        }
+    }
+    total
+}
+
+/// GET /api/captcha — пара чисел для регистрации (модалка на корневой).
+async fn api_captcha() -> Response {
+    let a = rand_int(2, 9);
+    let b = rand_int(2, 9);
+    Json(json!({ "a": a, "b": b })).into_response()
+}
+
+/// GET /api/me — кто сейчас залогинен (для фронта корневой).
+async fn api_me(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let user = current_user(&state, &headers);
+    let body = json!({ "login": user });
+    if user.is_some() {
+        Json(body).into_response()
+    } else {
+        (StatusCode::UNAUTHORIZED, Json(body)).into_response()
+    }
+}
+
+/// GET /api/my-files — файлы залогиненного (JSON, для корневой в open/closed).
+/// В free — 404 (аккаунтов нет).
+async fn api_my_files(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if state.config.mode == crate::config::Mode::Free {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    }
+    let Some(login) = current_user(&state, &headers) else {
+        return (StatusCode::UNAUTHORIZED, Json(json!({"error": "not logged in"}))).into_response();
+    };
+    let rows: Vec<(String, i64, String, i64, i64, i64, Option<String>)> = sqlx::query_as(
+        "SELECT short_code, size, orig_name, expires_at, downloads, id, password_hash          FROM files WHERE owner_id = (SELECT id FROM users WHERE login = ?1) ORDER BY id DESC",
+    )
+    .bind(&login)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+    let now = janitor::now_secs();
+    let files: Vec<_> = rows
+        .into_iter()
+        .map(|(code, size, name, expires_at, downloads, id, pw_hash)| {
+            let infinite = expires_at == i64::MAX;
+            let expired = !infinite && expires_at <= now;
+            json!({
+                "id": id,
+                "code": code,
+                "name": name,
+                "size": size,
+                "expires_at": if infinite { serde_json::Value::Null } else { serde_json::Value::from(expires_at) },
+                "expired": expired,
+                "downloads": downloads,
+                "locked": pw_hash.is_some(),
+                "url": format!("{}/{}", state.config.base_url.trim_end_matches('/'), code),
+            })
+        })
+        .collect();
+    Json(json!({ "login": login, "files": files })).into_response()
 }
 
 /// GET / — главная (embedded index.html).
@@ -172,6 +252,21 @@ async fn upload(State(state): State<AppState>, req: Request) -> Response {
         e.1 += 1;
         if e.1 > MAX {
             return (StatusCode::TOO_MANY_REQUESTS, "слишком много загрузок, подожди немного").into_response();
+        }
+    }
+    // Лимит хранилища: 0 = без лимита. Считаем занятые байты (data+blobs), запрещаем при переполнении.
+    {
+        let limit = state.config.storage_limit_gb as u64 * 1024 * 1024 * 1024;
+        if limit > 0 && storage_used(&state).await >= limit {
+            return (StatusCode::INSUFFICIENT_STORAGE, "хранилище сервера переполнено, загрузка невозможна").into_response();
+        }
+    }
+    // allow_unreg_upload=false (open/closed): грузить могут только залогиненные.
+    // free не трогаем — там аккаунтов нет, параметр бессмыслен.
+    if !state.config.allow_unreg_upload && state.config.mode != crate::config::Mode::Free {
+        let user = current_user(&state, req.headers());
+        if user.is_none() {
+            return (StatusCode::FORBIDDEN, "загрузка только для зарегистрированных").into_response();
         }
     }
     let (parts, body) = req.into_parts();
@@ -394,7 +489,7 @@ async fn finish_upload(
     match res {
         Ok(done) => {
             if state.config.tracking {
-                log_event(state, done.last_insert_rowid(), "upload", headers).await;
+                log_event(state, done.last_insert_rowid(), "upload", headers, None).await;
             }
             Json(json!({
                 "short_code": code,
@@ -500,7 +595,7 @@ fn fingerprint(headers: &HeaderMap) -> String {
 
 /// Запись события, ТОЛЬКО если tracking включён. Ошибка записи не роняет
 /// запрос: трекинг — наблюдение, а не барьер.
-async fn log_event(state: &AppState, file_id: i64, kind: &str, headers: &HeaderMap) {
+async fn log_event(state: &AppState, file_id: i64, kind: &str, headers: &HeaderMap, peer_ip: Option<std::net::IpAddr>) {
     if !state.config.tracking {
         return;
     }
@@ -509,7 +604,11 @@ async fn log_event(state: &AppState, file_id: i64, kind: &str, headers: &HeaderM
     )
     .bind(file_id)
     .bind(kind)
-    .bind(client_ip(headers))
+    .bind(if headers.contains_key("x-forwarded-for") || headers.contains_key("x-real-ip") {
+        client_ip(headers)
+    } else {
+        peer_ip.map(|p| p.to_string()).unwrap_or_else(|| "local".to_string())
+    })
     .bind(fingerprint(headers))
     .bind(janitor::now_secs())
     .execute(&state.db)
@@ -523,31 +622,15 @@ async fn log_event(state: &AppState, file_id: i64, kind: &str, headers: &HeaderM
 // ============================================================
 
 /// GET /register — форма с арифметической капчей.
-async fn register_page(State(state): State<AppState>) -> Response {
-    if state.config.mode != crate::config::Mode::Open {
-        return (StatusCode::NOT_FOUND, "not found").into_response();
-    }
-    // простая капча: a + b, числа в скрытых полях, сумма проверяется на сервере
-    let a = rand_int(2, 9);
-    let b = rand_int(2, 9);
-    let body = format!(
-        r#"<p class="muted">регистрация</p>
-<form method="post" action="/register" class="panel">
-  <p><input name="login" placeholder="логин (3-30, a-z0-9_-)" required autofocus></p>
-  <p><input type="password" name="password" placeholder="пароль (6+)" required></p>
-  <p class="muted">сколько будет {a} + {b}?</p>
-  <input type="hidden" name="captcha_a" value="{a}">
-  <input type="hidden" name="captcha_b" value="{b}">
-  <p><input name="captcha_answer" placeholder="ответ" required></p>
-  <button type="submit">создать</button>
-</form><p class="muted">уже есть аккаунт? <a href="/login">войти</a></p>"#
-    );
-    page_shell("echodrop — регистрация", &body).into_response()
+async fn register_page(State(_state): State<AppState>) -> Response {
+    // вариант Б: отдельные страницы выпилены, вход/рега — модалки на корневой
+    Redirect::to("/").into_response()
 }
 
 /// POST /register — валидация, капча, INSERT, авто-вход.
 async fn register_submit(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     axum::extract::Form(form): axum::extract::Form<std::collections::HashMap<String, String>>,
 ) -> Response {
     if state.config.mode != crate::config::Mode::Open {
@@ -560,6 +643,14 @@ async fn register_submit(
     let cap_ans: i64 = form.get("captcha_answer").and_then(|s| s.parse().ok()).unwrap_or(-999);
 
     let err = |msg: &str| -> Response {
+        let wants_plain = headers
+            .get(header::ACCEPT)
+            .and_then(|v| v.to_str().ok())
+            .map(|a| a.contains("text/plain"))
+            .unwrap_or(false);
+        if wants_plain {
+            return (StatusCode::UNPROCESSABLE_ENTITY, msg.to_string()).into_response();
+        }
         (
             StatusCode::UNPROCESSABLE_ENTITY,
             page_shell("echodrop — регистрация", &format!("<p class='err'>{msg}</p><p><a href='/register'>ещё раз</a></p>")),
@@ -575,6 +666,13 @@ async fn register_submit(
     }
     if cap_a < 0 || cap_b < 0 || cap_a + cap_b != cap_ans {
         return err("капча не сходится");
+    }
+    // Invite-токен (open): если задан в конфиге — регистрация только с ним.
+    if let Some(want) = &state.config.registration_token {
+        let got = form.get("reg_token").cloned().unwrap_or_default();
+        if got != *want {
+            return err("неверный код приглашения");
+        }
     }
     let hash = match crate::auth::hash_password(&password) {
         Ok(h) => h,
@@ -645,7 +743,7 @@ fn current_user(state: &AppState, headers: &HeaderMap) -> Option<String> {
 fn page_shell(title: &str, body: &str) -> Html<String> {
     Html(format!(
         r#"<!doctype html><html lang="ru"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><title>{title}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="icon" href="/static/logo.svg" type="image/svg+xml"><title>{title}</title>
 <link rel="stylesheet" href="/static/style.css">
 </head><body>
 <script>document.body.dataset.theme = localStorage.getItem('echodrop_theme') || 'dark';</script>
@@ -663,26 +761,15 @@ fn site_header(extra: &str) -> String {
 }
 
 /// GET /login — форма входа.
-async fn login_page(State(state): State<AppState>) -> Response {
-    if state.config.mode == crate::config::Mode::Free {
-        return (StatusCode::NOT_FOUND, "not found").into_response();
-    }
-    page_shell(
-        "echodrop — вход",
-        r#"<p class="muted">вход в кабинет</p>
-<form method="post" action="/login" class="panel">
-  <p><input name="login" placeholder="логин" required autofocus></p>
-  <p><input type="password" name="password" placeholder="пароль" required></p>
-  <p class="err" id="err"></p>
-  <button type="submit">войти</button>
-</form>"#,
-    )
-    .into_response()
+async fn login_page(State(_state): State<AppState>) -> Response {
+    // вариант Б: отдельные страницы выпилены, вход/рега — модалки на корневой
+    Redirect::to("/").into_response()
 }
 
 /// POST /login — проверка bcrypt, cookie сессии.
 async fn login_submit(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     axum::extract::Form(form): axum::extract::Form<std::collections::HashMap<String, String>>,
 ) -> Response {
     if state.config.mode == crate::config::Mode::Free {
@@ -702,6 +789,14 @@ async fn login_submit(
         None => false,
     };
     if !ok {
+        let wants_plain = headers
+            .get(header::ACCEPT)
+            .and_then(|v| v.to_str().ok())
+            .map(|a| a.contains("text/plain"))
+            .unwrap_or(false);
+        if wants_plain {
+            return (StatusCode::UNAUTHORIZED, "неверный логин или пароль").into_response();
+        }
         return (
             StatusCode::UNAUTHORIZED,
             page_shell(
@@ -742,62 +837,9 @@ async fn logout() -> Response {
 }
 
 /// GET /my — кабинет: свои файлы, удаление, выход.
-async fn my_page(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if state.config.mode == crate::config::Mode::Free {
-        return (StatusCode::NOT_FOUND, "not found").into_response();
-    }
-    let Some(login) = current_user(&state, &headers) else {
-        return (
-            StatusCode::SEE_OTHER,
-            [(header::LOCATION, "/login".to_string())],
-        )
-            .into_response();
-    };
-    let rows: Vec<(String, i64, String, i64, i64, i64, Option<String>)> = sqlx::query_as(
-        "SELECT short_code, size, orig_name, expires_at, downloads, id, password_hash \
-         FROM files WHERE owner_id = (SELECT id FROM users WHERE login = ?1) ORDER BY id DESC",
-    )
-    .bind(&login)
-    .fetch_all(&state.db)
-    .await
-    .unwrap_or_default();
-    let now = janitor::now_secs();
-    let mut cards = String::new();
-    for (code, size, name, expires_at, downloads, id, pw_hash) in rows {
-        let infinite = expires_at == i64::MAX;
-        let expired = !infinite && expires_at <= now;
-        let status = if infinite { "навсегда" } else if expired { "истёк" } else { "жив" };
-        let lock = if pw_hash.is_some() { " · 🔒 запаролен" } else { "" };
-        let until = if infinite {
-            "без срока".to_string()
-        } else if expired {
-            "—".to_string()
-        } else {
-            format!("до смерти {}", human_time(expires_at - now))
-        };
-        let card = format!(
-            r#"<div class="panel"><div class="row">
-  <div><b>{name}</b> <span class="muted">({})</span><br>
-  <span class="muted">{code} · {until} · скачали {downloads} раз · {status}{lock}</span></div>
-  <form method="post" action="/my/del/{id}" style="margin:0">
-    <button class="danger" type="submit">удалить</button>
-  </form>
-</div></div>"#,
-            human_size(size),
-        );
-        cards.push_str(&card);
-    }
-    if cards.is_empty() {
-        cards = "<p class='muted'>пока ничего не загружено</p>".into();
-    }
-    let body = format!(
-        r#"{}"
-{cards}"#,
-        site_header(&format!(
-            "{login} · <a href=\"/\">загрузить</a> · <a href=\"/logout\">выйти</a>"
-        ))
-    );
-    page_shell("echodrop — кабинет", &body).into_response()
+async fn my_page(State(_state): State<AppState>) -> Response {
+    // вариант Б: отдельные страницы выпилены, вход/рега — модалки на корневой
+    Redirect::to("/").into_response()
 }
 
 /// POST /my/del/{id} — удалить свой файл (владение проверяется по owner).
@@ -876,10 +918,30 @@ struct FileRow {
 }
 
 /// GET /{code} — стрим файла. Нет/истёк = 404 (не раскрываем, чем именно).
+#[derive(Clone, Copy)]
+struct PeerAddr(pub std::net::IpAddr);
+
+struct PeerIp(pub Option<std::net::IpAddr>);
+
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for PeerIp {
+    type Rejection = std::convert::Infallible;
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _s: &S,
+    ) -> Result<Self, Self::Rejection> {
+        let ip = parts
+            .extensions
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+            .map(|ci| ci.0.ip());
+        Ok(PeerIp(ip))
+    }
+}
+
 async fn download(
     State(state): State<AppState>,
     axum::extract::Path(code): axum::extract::Path<String>,
     headers: HeaderMap,
+    PeerIp(peer): PeerIp,
 ) -> Response {
     if code.len() != 7 || !code.bytes().all(|b| b.is_ascii_alphanumeric()) {
         return (StatusCode::NOT_FOUND, "not found").into_response();
@@ -935,7 +997,7 @@ async fn download(
         .execute(&state.db)
         .await;
     if state.config.tracking {
-        log_event(&state, f.id, "download", &headers).await;
+        log_event(&state, f.id, "download", &headers, peer).await;
     }
 
     let disp = format!("attachment; filename=\"{}\"", f.orig_name.replace('"', "'"));
@@ -961,12 +1023,12 @@ async fn register_flow() {
     crate::db::migrate_users(&state.db).await.unwrap();
     let app = router(10 * 1024 * 1024).with_state(state.clone());
 
-    // GET-форма содержит капчу
+    // Вариант Б: GET /register — redirect, капча теперь в /api/captcha
     let resp = app
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/register")
+                .uri("/api/captcha")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -974,8 +1036,8 @@ async fn register_flow() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    let html = String::from_utf8_lossy(&bytes);
-    assert!(html.contains("captcha_a"), "скрытые поля капчи есть");
+    let cap = String::from_utf8_lossy(&bytes);
+    assert!(cap.contains("\"a\":"), "JSON-капча есть: {cap}");
 
     // POST с неверной капчей -> 422
     let resp = app
@@ -1028,7 +1090,7 @@ async fn register_flow() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
-    // Closed-режим: /register 404
+    // Closed-режим: GET /register — redirect на / (страниц нет), POST /register — 404
     let mut state2 = test_state("regclosed").await;
     state2.config.mode = Mode::Closed;
     crate::db::migrate_users(&state2.db).await.unwrap();
@@ -1036,8 +1098,10 @@ async fn register_flow() {
     let resp = app2
         .oneshot(
             Request::builder()
+                .method("POST")
                 .uri("/register")
-                .body(Body::empty())
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("login=x&password=xxxxxx&captcha_a=2&captcha_b=3&captcha_answer=5"))
                 .unwrap(),
         )
         .await
@@ -1131,12 +1195,12 @@ async fn login_and_my_flow() {
     assert_eq!(resp.status(), StatusCode::OK);
     let code = take_code(&json_body(resp).await);
 
-    // /my с cookie -> 200, содержит файл и логин
+    // Вариант Б: /api/my-files с cookie -> 200, JSON с файлом и логином
     let resp = app
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/my")
+                .uri("/api/my-files")
                 .header("cookie", &cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -1145,9 +1209,9 @@ async fn login_and_my_flow() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    let html = String::from_utf8_lossy(&bytes);
-    assert!(html.contains("mine.txt"), "файл в кабинете");
-    assert!(html.contains("alice"), "логин в кабинете");
+    let json = String::from_utf8_lossy(&bytes);
+    assert!(json.contains("mine.txt"), "файл в списке: {json}");
+    assert!(json.contains("alice"), "логин в списке: {json}");
 
     // /my/del/{id}: узнаем id из БД
     let (fid,): (i64,) = sqlx::query_as("SELECT id FROM files WHERE short_code = ?1")
@@ -1200,7 +1264,8 @@ async fn free_mode_no_login() {
     let mut state = test_state("free").await;
     state.config.mode = Mode::Free;
     let app = router(10 * 1024 * 1024).with_state(state);
-    for uri in ["/login", "/my"] {
+    // Вариант Б: страницы-аккаунты выпилены (redirect на /), в Free проверяем 404 API
+    for uri in ["/api/my-files"] {
         let resp = app
             .clone()
             .oneshot(
@@ -1231,12 +1296,15 @@ async fn test_state(tag: &str) -> AppState {
             mode: Mode::Free,
             listen: "127.0.0.1:0".into(),
             storage_path: dir.to_str().unwrap().into(),
+            storage_limit_gb: 0, // без лимита в тестах (0 = ∞)
             max_file_size_mb: 10,
             default_ttl_hours: 1,
             max_ttl_hours: 720,
             allow_infinite_ttl: false,
             site_name: "echodrop-test".into(),
             tracking: false,
+            registration_token: None,
+            allow_unreg_upload: true,
             base_url: "http://test".into(),
         },
         db: pool,

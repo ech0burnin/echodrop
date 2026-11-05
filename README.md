@@ -17,9 +17,20 @@
 - Конфигурация только через env — systemd-friendly, docker-friendly
 - Опциональный трекинг upload/download (IP + fingerprint) для правовой реальности
 
-## Быстрый старт
+## Быстрый старт (из релизного архива)
 
-Сборка (Rust 1.75+):
+```bash
+# скачать и распаковать архив релиза (echodrop-linux-amd64.tar.gz), затем:
+cp echodrop.env.example echodrop.env   # отредактируй под себя
+./install.sh                           # сервис + CLI в PATH
+source ~/.bashrc                       # чтобы echodrop был виден сразу
+```
+
+install.sh делает три вещи: кладёт симлинк в `~/.local/bin`, подключает
+`echodrop.env` в `~/.bashrc` (CLI работает с той же базой, что сервис),
+поднимает systemd user-юнит `echodrop`. Прокинуть наружу — reverse-proxy (nginx), см. ниже.
+
+Сборка из исходников (Rust 1.75+):
 
 ```bash
 cargo build --release
@@ -27,8 +38,6 @@ cp echodrop.env.example echodrop.env   # отредактируй под себ�
 set -a; . ./echodrop.env; set +a
 ./target/release/echodrop
 ```
-
-Сервер поднимется на `0.0.0.0:8080` (меняется через `ECHODROP_LISTEN`).
 
 ## Развертывание
 
@@ -49,7 +58,7 @@ Restart=on-failure
 
 [Install]
 WantedBy=multi-user.target
-```bash
+```
 
 ```bash
 sudo systemctl daemon-reload
@@ -102,8 +111,33 @@ server {
 | `ECHODROP_MAX_TTL_HOURS` | `720` | потолок TTL |
 | `ECHODROP_ALLOW_INFINITE_TTL` | `false` | разрешить «бессрочно» |
 | `ECHODROP_TRACKING` | `false` | трекинг upload/download |
+| `ECHODROP_REGISTRATION_TOKEN` | — | код приглашения при регистрации (только open; пусто = свободная регистрация) |
+| `ECHODROP_ALLOW_UNREG_UPLOAD` | `true` | false = грузить могут только залогиненные (open/closed; в free игнорируется) |
+| `ECHODROP_STORAGE_LIMIT_GB` | `0` | потолок хранилища (0 = без лимита) |
 | `ECHODROP_SITE_NAME` | `echodrop` | название сайта |
 | `ECHODROP_BASE_URL` | `http://localhost:8080` | публичный URL для ссылок |
+
+## Режимы и аккаунты
+
+- **free** — классическая анонимная дропзона. Аккаунтов нет, страницы входа/регистрации скрыты.
+- **open** — + аккаунты: свободная регистрация (или по invite-коду `ECHODROP_REGISTRATION_TOKEN`), вход, «мои файлы» прямо на главной.
+- **closed** — дропзона для всех, аккаунты только через CLI (`echodrop user add`). Вход и «мои файлы» доступны созданным юзерам.
+
+Вход и регистрация — модальные окна на главной (отдельных страниц нет). Список файлов залогиненного пользователя отображается на главной под зоной загрузки.
+
+CLI для доверенных юзеров (закрытый режим):
+
+```bash
+echodrop user add LOGIN PASSWORD   # создать доверенного
+echodrop user list                # список
+echodrop user del LOGIN           # удалить
+```
+
+CLI работает с той же базой, что и сервис — при условии, что видит те же env-переменные.
+`install.sh` подключает `echodrop.env` в `~/.bashrc`, поэтому после установки всё совпадает
+автоматически. Если сервер запускался вручную с нестандартным `ECHODROP_STORAGE_PATH` —
+укажите его и при запуске CLI одной командой: `ECHODROP_STORAGE_PATH=/path echodrop user add ...`
+(префикс `VAR=value` перед командой задаёт переменную только для этого запуска).
 
 ## Roadmap
 

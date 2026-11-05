@@ -3,7 +3,7 @@
    JS-сниппетом на <body data-theme=...> (localStorage echodrop_theme). */
 body {
   --bg: #111; --panel: #181818; --line: #2a2a2a;
-  --txt: #eee; --dim: #888; --accent: #7aa2f7; --err: #f7768e;
+  --txt: #eee; --dim: #888; --accent: #f7768e; --err: #f7768e;
   background: var(--bg); color: var(--txt);
   font-family: system-ui, -apple-system, sans-serif;
   margin: 0;

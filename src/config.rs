@@ -66,6 +66,10 @@ pub struct Config {
     /// Каталог для загруженных файлов.
     #[serde(default = "default_storage_path")]
     pub storage_path: String,
+    /// Лимит хранилища в ГБ (сумма размеров файлов на диске в storage_path).
+    /// При превышении: upload запрещён, фронт рисует «хранилище переполнено».
+    #[serde(default = "default_storage_limit_gb")]
+    pub storage_limit_gb: u64,
     /// Потолок размера файла в мегабайтах.
     #[serde(default = "default_max_file_size_mb")]
     pub max_file_size_mb: u64,
@@ -92,14 +96,33 @@ pub struct Config {
     /// приватности владельца инстанса.
     #[serde(default)]
     pub tracking: bool,
+    /// Invite-токен регистрации (только режим open): если задан — при
+    /// регистрации требуется ввести его (поле reg_token). Регистрация без
+    /// верного токена отклоняется. Как invite-код в Matrix.
+    #[serde(default)]
+    pub registration_token: Option<String>,
+    /// Разрешена ли загрузка БЕЗ регистрации (режимы open/closed).
+    /// true — по умолчанию: анонимы могут грузить, как сейчас.
+    /// false — хостер запретил анонимные загрузки: файлы кладут только
+    /// залогиненные. В free не работает (там нет аккаунтов вовсе).
+    #[serde(default = "default_allow_unreg_upload")]
+    pub allow_unreg_upload: bool,
 }
 
 fn default_mode() -> Mode {
     Mode::Free
 }
+
+fn default_allow_unreg_upload() -> bool {
+    true
+}
 fn default_listen() -> String {
     "0.0.0.0:8080".to_string()
 }
+fn default_storage_limit_gb() -> u64 {
+    10
+}
+
 fn default_storage_path() -> String {
     "./data".to_string()
 }
@@ -161,6 +184,11 @@ impl Config {
                 cfg.listen = format!("{ip}:{port}");
             }
         }
+        if let Ok(v) = std::env::var("ECHODROP_STORAGE_LIMIT_GB") {
+            if !v.is_empty() {
+                cfg.storage_limit_gb = v.parse().map_err(|_| format!("ECHODROP_STORAGE_LIMIT_GB: {v:?} — ожидается целое число ГБ"))?;
+            }
+        }
         if let Ok(v) = std::env::var("ECHODROP_STORAGE_PATH") {
             if !v.is_empty() {
                 cfg.storage_path = v;
@@ -204,6 +232,18 @@ impl Config {
         if let Ok(v) = std::env::var("ECHODROP_TRACKING") {
             if !v.is_empty() {
                 cfg.tracking = v.parse().map_err(|_| format!("ECHODROP_TRACKING: {v:?} — ожидается true|false"))?;
+            }
+        }
+        if let Ok(v) = std::env::var("ECHODROP_REGISTRATION_TOKEN") {
+            if !v.is_empty() {
+                cfg.registration_token = Some(v);
+            }
+        }
+        if let Ok(v) = std::env::var("ECHODROP_ALLOW_UNREG_UPLOAD") {
+            if !v.is_empty() {
+                cfg.allow_unreg_upload = v
+                    .parse()
+                    .map_err(|_| format!("ECHODROP_ALLOW_UNREG_UPLOAD: {v:?} — ожидается true|false"))?;
             }
         }
 

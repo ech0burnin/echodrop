@@ -7,17 +7,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>echodrop</title>
+<link rel="icon" href="/static/logo.svg" type="image/svg+xml">
 <style>
   body {
     --bg: #111; --panel: #181818; --line: #2a2a2a; --txt: #eee; --dim: #888;
-    --accent: #7aa2f7; --ok: #9ece6a; --err: #f7768e; --hover: #1a1f2e;
+    --accent: #f7768e; --ok: #9ece6a; --err: #f7768e; --hover: #241a1e;
     background: var(--bg); color: var(--txt);
     font-family: system-ui, -apple-system, sans-serif;
     display: flex; flex-direction: column; align-items: center;
     padding: 32px 16px; gap: 20px; margin: 0; min-height: 100vh;
   }
   body[data-theme='light'] {
-    --bg: #f5f5f5; --panel: #fff; --line: #ddd; --txt: #111; --dim: #666; --hover: #e8eefc;
+    --bg: #f5f5f5; --panel: #fff; --line: #ddd; --txt: #111; --dim: #666; --hover: #f9e9ec;
   }
   * { box-sizing: border-box; }
   header { text-align: center; }
@@ -36,6 +37,30 @@
   }
   .switches button:hover { border-color: var(--accent); }
 
+  #authNav a, #userNav a { color: var(--dim); text-decoration: underline; font-size: 14px; cursor: pointer; }
+  #userNav { margin-top: 10px; display: flex; gap: 16px; justify-content: center; align-items: center; }
+  #userNav[hidden], #authNav[hidden] { display: none; }
+  [hidden] { display: none !important; } /* авторский display:flex не должен перебивать hidden */
+  #userNav #userName { color: var(--accent); font-size: 14px; font-weight: 600; }
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 100; }
+  .modal-box { background: var(--panel); padding: 26px 30px; border-radius: 12px; width: min(92vw, 380px); position: relative; border: 1px dashed var(--accent); }
+  .modal-box h2 { margin: 0 0 14px; font-size: 18px; }
+  .modal-close { position: absolute; top: 8px; right: 10px; background: none; border: 0; font-size: 22px; color: var(--dim); cursor: pointer; }
+  .modal-box form { display: flex; flex-direction: column; gap: 8px; }
+  .modal-box label { font-size: 12px; color: var(--dim); margin-top: 4px; }
+  .modal-box input { padding: 8px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--txt); font-size: 14px; }
+  .modal-box input:focus { outline: 1px solid var(--accent); }
+  .captcha-row { display: flex; align-items: center; gap: 6px; font-size: 16px; }
+  .captcha-row input { width: 64px; text-align: center; }
+  .btn-primary { padding: 10px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; font-size: 14px; cursor: pointer; margin-top: 6px; }
+  .err { color: #ff6b6b; font-size: 13px; }
+  #authSwitch { margin: 12px 0 0; text-align: center; }
+  .btn-danger { padding: 10px; border: 0; border-radius: 6px; background: var(--err); color: #fff; font-size: 14px; cursor: pointer; margin-top: 6px; }
+  .btn-ghost { padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: none; color: var(--dim); font-size: 14px; cursor: pointer; margin-top: 6px; }
+  .modal-btns { display: flex; gap: 10px; margin-top: 14px; }
+  .modal-btns button { flex: 1; margin-top: 0; }
+  #delModalText { font-size: 14px; color: var(--txt); word-break: break-all; }
+  button.del-file { border-color: var(--err); color: var(--err); }
   #dropzone {
     width: 100%; max-width: 560px;
     border: 2px dashed var(--line); border-radius: 14px;
@@ -98,8 +123,12 @@
   <h1><img src="/static/logo.svg" alt=""> echodrop</h1>
   <p data-i18n="tagline">уронил файл — забрал ссылку</p>
   <nav id="authNav" hidden>
-    <a href="/login" data-i18n="nav_login">войти</a>
-    <a href="/register" data-i18n="nav_register">зарегистрироваться</a>
+    <a href="#" id="navLogin" data-i18n="nav_login">войти</a>
+    <a href="#" id="navRegister" data-i18n="nav_register">зарегистрироваться</a>
+  </nav>
+  <nav id="userNav" hidden>
+    <span id="userName"></span>
+    <a href="#" id="navLogout" data-i18n="nav_logout">выйти</a>
   </nav>
   <div class="switches">
     <button id="themeBtn" title="theme">🌙</button>
@@ -122,14 +151,60 @@
 </div>
 <div id="state-line" class="hint"></div>
 
+<p id="login-to-upload" hidden style="text-align:center;margin:18px 0" data-i18n="login_to_upload"><a href="#">войдите, чтобы загружать файлы</a></p>
 <div id="files"></div>
 
-<div id="tracking-note" class="hint" hidden data-i18n="tracking_note">сервер фиксирует посещения (IP, время)</div>
-<footer data-i18n="footer">echodrop · файлы не индексируются и умирают сами</footer>
+<div id="storageFullNote" class="hint err" hidden data-i18n="storage_full">хранилище сервера переполнено, загрузка невозможна</div>
+
+<div id="authModal" class="modal" hidden>
+  <div class="modal-box">
+    <button class="modal-close" id="authModalClose" aria-label="close">×</button>
+    <h2 id="authTitle" data-i18n="nav_login">войти</h2>
+    <form id="authForm">
+      <label>login</label>
+      <input name="login" autocomplete="username" required>
+      <label>password</label>
+      <input name="password" type="password" autocomplete="current-password" required>
+      <label id="regTokenRow" hidden>token</label>
+      <input id="regTokenInput" name="reg_token" hidden>
+      <div id="captchaRow" hidden class="captcha-row">
+        <span id="capA"></span> + <span id="capB"></span> = <input name="captcha_answer" id="capAns" inputmode="numeric" size="4" required>
+        <input type="hidden" name="captcha_a" id="capAHidden">
+        <input type="hidden" name="captcha_b" id="capBHidden">
+      </div>
+      <button type="submit" class="btn-primary" id="authSubmit" data-i18n="nav_login">войти</button>
+      <div id="authErr" class="err" hidden></div>
+    </form>
+    <p class="hint" id="authSwitch"><a href="#" id="switchToRegister" data-i18n="nav_register">зарегистрироваться</a><a href="#" id="switchToLogin" data-i18n="switch_to_login" hidden>уже зарегистрированы? войти</a></p>
+  </div>
+</div>
+
+<div id="delModal" class="modal" hidden>
+  <div class="modal-box">
+    <button class="modal-close" id="delModalClose" aria-label="close">×</button>
+    <h2 data-i18n="confirm_del">удалить файл?</h2>
+    <p id="delModalText"></p>
+    <div class="modal-btns">
+      <button id="delCancel" class="btn-ghost" data-i18n="cancel">отмена</button>
+      <button id="delConfirm" class="btn-danger" data-i18n="delete">удалить</button>
+    </div>
+  </div>
+</div>
+<footer><span data-i18n="footer">echodrop · файлы не индексируются и умирают сами</span><span id="tracking-note" hidden> · <span data-i18n="tracking_note">сервер фиксирует посещения (IP, время)</span></span></footer>
 
 <script>
 'use strict';
 const dz = document.getElementById('dropzone');
+
+function applyUploadAccess() {
+  const regRequired = CFG && CFG.registration_required;
+  const blocked = regRequired && !ME;
+  dz.hidden = blocked;
+  document.getElementById('controls').hidden = blocked;
+  document.getElementById('state-line').hidden = blocked;
+  const note = document.getElementById('login-to-upload');
+  if (note) note.hidden = !blocked;
+}
 const picker = document.getElementById('picker');
 const ttlSel = document.getElementById('ttl');
 const pwInput = document.getElementById('pw');
@@ -166,6 +241,7 @@ fetch('/static/i18n.json').then((r) => r.json()).then((d) => {
 document.getElementById('langBtn').addEventListener('click', () => {
   LANG = LANG === 'ru' ? 'en' : 'ru';
   localStorage.setItem('echodrop_lang', LANG);
+  renderUnified();
   // перерисовка живых подписей и опций TTL на новом языке,
   // выбранный TTL сохраняем, если он есть в новом списке
   const keepTtl = ttlSel.value;
@@ -177,6 +253,218 @@ document.getElementById('langBtn').addEventListener('click', () => {
   applyStateLine();
 });
 
+// --- авторизация (модалки) ---
+let AUTH_MODE = 'login'; // 'login' | 'register'
+let ME = null;
+const authModal = document.getElementById('authModal');
+const authErr = document.getElementById('authErr');
+const authForm = document.getElementById('authForm');
+const captchaRow = document.getElementById('captchaRow');
+const regTokenRow = document.getElementById('regTokenRow');
+const regTokenInput = document.getElementById('regTokenInput');
+const authTitle = document.getElementById('authTitle');
+const authSubmit = document.getElementById('authSubmit');
+
+function setAuthMode(m) {
+  AUTH_MODE = m;
+  const isReg = m === 'register';
+  document.getElementById('switchToRegister').hidden = isReg || !regAllowedByMode();
+  document.getElementById('switchToLogin').hidden = !isReg;
+  authTitle.textContent = t(isReg ? 'nav_register' : 'nav_login');
+  authSubmit.textContent = t(isReg ? 'nav_register' : 'nav_login');
+  captchaRow.hidden = !isReg;
+  document.getElementById('capAns').required = isReg;
+  regTokenRow.hidden = !(isReg && CFG && CFG.reg_token_required);
+  regTokenInput.hidden = !(isReg && CFG && CFG.reg_token_required);
+  if (isReg) fetchCaptcha();
+  authErr.hidden = true;
+}
+
+function fetchCaptcha() {
+  fetch('/api/captcha').then((r) => r.json()).then((d) => {
+    document.getElementById('capA').textContent = d.a;
+    document.getElementById('capB').textContent = d.b;
+    document.getElementById('capAHidden').value = d.a;
+    document.getElementById('capBHidden').value = d.b;
+  }).catch(() => {});
+}
+
+function openAuth(m) {
+  authModal.hidden = false;
+  setAuthMode(m);
+}
+function closeAuth() { authModal.hidden = true; authErr.hidden = true; }
+
+document.getElementById('navLogin').addEventListener('click', (e) => { e.preventDefault(); openAuth('login'); });
+document.getElementById('navRegister').addEventListener('click', (e) => { e.preventDefault(); openAuth('register'); });
+// в closed с закрытой регистрацией ссылки «зарегистрироваться» нет вовсе
+function regAllowedByMode() {
+  return !CFG || CFG.mode === 'open' || (CFG.mode === 'closed' && !CFG.registration_required);
+}
+document.getElementById('switchToRegister').addEventListener('click', (e) => { e.preventDefault(); openAuth('register'); });
+document.getElementById('switchToLogin').addEventListener('click', (e) => { e.preventDefault(); openAuth('login'); });
+document.getElementById('authModalClose').addEventListener('click', closeAuth);
+authModal.addEventListener('click', (e) => { if (e.target === authModal) closeAuth(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !authModal.hidden) closeAuth(); });
+
+authForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  authErr.hidden = true;
+  const fd = new FormData(authForm);
+  const url = AUTH_MODE === 'register' ? '/register' : '/login';
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      body: new URLSearchParams(fd),
+      headers: { 'Accept': 'text/plain' },
+      credentials: 'same-origin',
+      redirect: 'follow'
+    });
+    if (r.ok || r.status === 303 || r.redirected) {
+      closeAuth();
+      await refreshMe();
+      return;
+    }
+    let msg = 'error';
+    try { msg = (await r.text()).trim().slice(0, 200); } catch (_) {}
+    authErr.textContent = msg;
+    authErr.hidden = false;
+    if (AUTH_MODE === 'register') fetchCaptcha();
+  } catch (_) {
+    authErr.textContent = 'network error';
+    authErr.hidden = false;
+  }
+});
+
+async function refreshMe() {
+  try {
+    const r = await fetch('/api/me', { credentials: 'same-origin' });
+    if (r.ok) {
+      const d = await r.json();
+      ME = d.login;
+    } else {
+      ME = null;
+    }
+  } catch (_) { ME = null; }
+  renderAuth();
+  applyUploadAccess();
+  loadMyFiles();
+}
+
+// --- единый список файлов: если залогинен — все файлы юзера обычными карточками ---
+let MY_FILES = null; // null = ещё не грузили / не залогинен; [] = пусто
+
+async function loadMyFiles() {
+  if (!ME || !CFG || CFG.mode === 'free') { MY_FILES = null; renderUnified(); return; }
+  try {
+    const r = await fetch('/api/my-files', { credentials: 'same-origin' });
+    if (!r.ok) { MY_FILES = null; renderUnified(); return; }
+    const d = await r.json();
+    MY_FILES = d.files || [];
+  } catch (_) { MY_FILES = null; }
+  renderUnified();
+}
+
+function renderUnified() {
+  list.innerHTML = '';
+  if (!ME || !MY_FILES) return;
+  for (const f of MY_FILES) list.appendChild(myFileRow(f));
+}
+
+function myFileRow(f) {
+  const el = document.createElement('div');
+  el.className = 'row done';
+  el.innerHTML = '<div class="name"></div><div class="meta"></div>';
+  el.querySelector('.name').textContent = f.name;
+  const meta = [humanSize(f.size)];
+  if (f.expires_at === null) {
+    meta.push(t('forever', 'бессрочно'));
+  } else {
+    const loc = LANG === 'ru' ? 'ru-RU' : 'en-GB';
+    meta.push((f.expired ? t('expired', 'истёк') + ' ' : t('until', 'до ')) + new Date(f.expires_at * 1000).toLocaleDateString(loc));
+  }
+  el.querySelector('.meta').textContent = meta.join(' · ');
+  const box = document.createElement('div');
+  box.className = 'link';
+  const a = document.createElement('a');
+  a.href = f.url; a.textContent = f.url;
+  const btn = document.createElement('button');
+  btn.className = 'copy'; btn.textContent = t('copy', 'копировать');
+  btn.onclick = () => {
+    copyText(f.url)
+      .then(() => { btn.textContent = t('ok', 'ок'); setTimeout(() => { btn.textContent = t('copy', 'копировать'); }, 1200); })
+      .catch(() => { window.prompt(t('copy_manual', 'скопируй вручную:'), f.url); });
+  };
+  const del = document.createElement('button');
+  del.className = 'copy del-file'; del.textContent = t('delete', 'удалить');
+  del.onclick = () => askDelete(f, el);
+  box.append(a, btn, del);
+  if (f.locked) {
+    const lock = document.createElement('span');
+    lock.className = 'ttl-left';
+    lock.textContent = '🔒 ' + t('locked', 'под паролем');
+    box.appendChild(lock);
+  }
+  el.appendChild(box);
+  return el;
+}
+
+// --- модалка удаления (в стиле auth-модалки) ---
+const delModal = document.getElementById('delModal');
+let DEL_TARGET = null;
+function askDelete(f, row) {
+  DEL_TARGET = { f, row };
+  document.getElementById('delModalText').textContent = f.name;
+  delModal.hidden = false;
+}
+function closeDelModal() { delModal.hidden = true; DEL_TARGET = null; }
+document.getElementById('delModalClose').addEventListener('click', closeDelModal);
+document.getElementById('delCancel').addEventListener('click', closeDelModal);
+delModal.addEventListener('click', (e) => { if (e.target === delModal) closeDelModal(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !delModal.hidden) closeDelModal(); });
+document.getElementById('delConfirm').addEventListener('click', async () => {
+  if (!DEL_TARGET) return;
+  const { f, row } = DEL_TARGET;
+  try {
+    const r = await fetch('/my/del/' + f.id, { method: 'POST', credentials: 'same-origin' });
+    if (r.ok) {
+      if (MY_FILES) MY_FILES = MY_FILES.filter((x) => x.id !== f.id);
+      row.remove();
+    }
+  } catch (_) {}
+  closeDelModal();
+});
+
+function renderAuth() {
+
+// --- logout ---
+document.getElementById('navLogout').addEventListener('click', async (e) => {
+  e.preventDefault();
+  try { await fetch('/logout', { credentials: 'same-origin' }); } catch (_) {}
+  ME = null; MY_FILES = null;
+  await refreshMe();
+});
+  const authNav = document.getElementById('authNav');
+  const userNav = document.getElementById('userNav');
+  const userName = document.getElementById('userName');
+  const navRegister = document.getElementById('navRegister');
+  if (ME) {
+    authNav.hidden = true;
+    userNav.hidden = false;
+    userName.textContent = ME;
+  } else {
+    // open — войти+зарег; closed — «войти», если анонимная загрузка запрещена; free — ничего
+    const showLogin = CFG && (CFG.mode === 'open' || (CFG.mode === 'closed' && CFG.registration_required));
+    authNav.hidden = !showLogin;
+    navRegister.hidden = !(CFG && CFG.mode === 'open');
+    userNav.hidden = true;
+  }
+}
+
+
+
+refreshMe();
+
 // --- конфиг сервера ---
 let CFG = null;
 fetch('/config.json').then((r) => r.json()).then((c) => {
@@ -185,8 +473,20 @@ fetch('/config.json').then((r) => r.json()).then((c) => {
   applyStateLine();
   const tn = document.getElementById('tracking-note');
   if (tn && c.tracking) tn.hidden = false;
-  const nav = document.getElementById('authNav');
-  if (nav) nav.hidden = !(c.mode === 'open');
+  renderAuth(); // режим известен — перерисовать шапку (гонка с refreshMe исключена)
+  applyUploadAccess();
+  loadMyFiles(); // конфиг пришёл после refreshMe — список ещё не построен, строим сейчас
+  applyUploadAccess();
+  // Хранилище переполнено: зоны загрузки нет, сообщение вместо неё.
+  const dzLocal = document.getElementById('dropzone');
+  const opts = document.getElementById('uploadOptions');
+  const full = c.storage_limit_gb > 0 && c.storage_used_bytes >= c.storage_limit_gb * 1073741824;
+  const storeFull = document.getElementById('storageFullNote');
+  if (full) {
+    if (dzLocal) dzLocal.hidden = true;
+    if (opts) opts.hidden = true;
+    if (storeFull) storeFull.hidden = false;
+  }
 }).catch(() => { buildTtlOptions(); applyStateLine(); });
 
 function pluralRu(n, one, few, many) {
@@ -208,8 +508,9 @@ function buildTtlOptions() {
   const max = (CFG && CFG.max_ttl_hours) || 720;
   const inf = !!(CFG && CFG.allow_infinite_ttl);
   const def = (CFG && CFG.default_ttl_hours) || 24;
-  let opts = [1, 24, 168, 720].filter((h) => h <= max);
+  let opts = [1, 24, 72, 168, 720].filter((h) => h <= max);
   if (max > 720) opts.push(max);
+  if (max > 0 && !opts.includes(max)) opts.push(max); // нестандартный max тоже попадает в список
   if (inf) opts.push(0);
   if (!opts.length) opts = [Math.max(1, Math.min(max, def))];
   ttlSel.innerHTML = '';
@@ -256,7 +557,7 @@ function copyText(text) {
 // --- тема: dark <-> light (бинарная; в localStorage мог остаться auto со старых версий) ---
 const themeBtn = document.getElementById('themeBtn');
 function curTheme() { return document.body.dataset.theme === 'light' ? 'light' : 'dark'; }
-function setThemeIcon() { themeBtn.textContent = curTheme() === 'dark' ? '🌙' : '☀'; }
+function setThemeIcon() { themeBtn.textContent = curTheme() === 'dark' ? '🌙' : '☀️'; }
 setThemeIcon();
 themeBtn.addEventListener('click', () => {
   const next = curTheme() === 'dark' ? 'light' : 'dark';
@@ -302,15 +603,44 @@ function upload(file) {
     fd.append('file', file, file.name);
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/upload');
+    const metaEl = el.querySelector('.meta');
+    const t0 = Date.now();
+    let lastL = 0, lastT = t0, stalled = 0;
+    const stallTimer = setInterval(() => {
+      stalled += 10;
+      if (stalled >= 60) { clearInterval(stallTimer); xhr.abort(); }
+    }, 10000);
+    xhr.addEventListener('loadend', () => clearInterval(stallTimer));
     xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) fill.style.width = (e.loaded / e.total * 100) + '%';
+      stalled = 0;
+      if (!e.lengthComputable) return;
+      fill.style.width = (e.loaded / e.total * 100) + '%';
+      const now = Date.now();
+      if (now - lastT >= 500 && e.loaded > lastL) {
+        const spd = (e.loaded - lastL) / ((now - lastT) / 1000);
+        metaEl.textContent = humanSize(file.size) + ' · ' + (spd / 1048576 >= 1 ? (spd / 1048576).toFixed(1) + ' MB/s' : (spd / 1024).toFixed(0) + ' KB/s');
+        lastL = e.loaded; lastT = now;
+      }
     };
     xhr.onload = () => {
       try {
         const json = JSON.parse(xhr.responseText);
-        if (xhr.status === 200 && json.url) {
+        if (xhr.status !== 200) {
+          el.classList.add('err');
+          metaEl.textContent = (json && json.error) ? String(json.error).slice(0, 120) : t('upload_err', 'ошибка передачи, попробуй ещё раз');
+          return;
+        }
+        if (json.url) {
           fill.style.width = '100%';
           el.classList.add('done');
+          metaEl.textContent = humanSize(file.size);
+          if (ME && MY_FILES) {
+            MY_FILES.unshift({ name: file.name, size: file.size, url: json.url, id: json.id, expires_at: json.expires_at, locked: !!pwInput && !!pwInput.value });
+            renderUnified();
+            el.remove();
+            resolve();
+            return;
+          }
           const box = document.createElement('div');
           box.className = 'link';
           const a = document.createElement('a');
@@ -353,6 +683,8 @@ function upload(file) {
       resolve();
     };
     xhr.onerror = () => {
+      el.classList.add('err');
+      metaEl.textContent = t('upload_err', 'ошибка передачи, попробуй ещё раз');
       el.classList.add('fail');
       fill.style.width = '100%';
       const e = document.createElement('div');

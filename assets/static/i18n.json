@@ -29,7 +29,20 @@
     "state_protected": "файлы, загруженные сейчас, будут жить {ttl} и защищены паролем на скачивание",
     "state_open": "файлы, загруженные сейчас, будут жить {ttl} и могут быть скачаны любым человеком по ссылке, без пароля",
     "nav_login": "войти",
-    "nav_register": "зарегистрироваться"
+    "nav_register": "зарегистрироваться",
+    "nav_logout": "выйти",
+    "my_files": "мои файлы",
+    "my_files_empty": "пока ничего не загружено",
+    "copy_link": "копировать",
+    "copied": "скопировано",
+    "delete": "удалить",
+    "confirm_del": "удалить файл?",
+    "expired": "истёк",
+    "storage_full": "хранилище сервера переполнено, загрузка невозможна",
+    "switch_to_login": "уже зарегистрированы? войти",
+    "auth_err_network": "сеть недоступна",
+    "upload_err": "ошибка передачи, попробуй ещё раз",
+    "login_to_upload": "войдите, чтобы загружать файлы"
   },
   "en": {
     "tagline": "drop a file — grab a link",
@@ -61,6 +74,19 @@
     "state_protected": "files uploaded now live for {ttl} and are password-protected on download",
     "state_open": "files uploaded now live for {ttl} and can be downloaded by anyone with the link, no password",
     "nav_login": "sign in",
-    "nav_register": "sign up"
+    "nav_register": "sign up",
+    "nav_logout": "sign out",
+    "my_files": "my files",
+    "my_files_empty": "nothing uploaded yet",
+    "copy_link": "copy",
+    "copied": "copied",
+    "delete": "delete",
+    "confirm_del": "delete this file?",
+    "expired": "expired",
+    "storage_full": "server storage is full, upload unavailable",
+    "switch_to_login": "already registered? sign in",
+    "auth_err_network": "network error",
+    "upload_err": "transfer error, try again",
+    "login_to_upload": "sign in to upload files"
   }
 }

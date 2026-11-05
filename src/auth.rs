@@ -86,9 +86,12 @@ pub fn unlock_page(code: &str, wrong: bool) -> axum::response::Response {
  button {{ margin-top:12px;width:100%; }}
  .err {{ margin:0 0 12px; }}
 </style></head><body>
-<script>document.body.dataset.theme = localStorage.getItem('echodrop_theme') || 'dark';</script>
+<script>
+ document.body.dataset.theme = localStorage.getItem('echodrop_theme') || 'dark';
+ if (document.body.dataset.theme === 'light') document.addEventListener('DOMContentLoaded', () => {{ const i = document.querySelector('h1 img'); if (i) i.style.filter = 'none'; }});
+</script>
 <div class="card panel">
-<h1><img src="/static/logo.svg" alt="" style="height:24px;vertical-align:middle"> echodrop</h1><p class="sub">файл защищён паролем</p>{msg}
+<h1><img src="/static/logo.svg" alt="" style="height:24px;vertical-align:middle;filter:invert(1)"> echodrop</h1><p class="sub">файл защищён паролем</p>{msg}
 <form method="post" action="/{code}/unlock">
  <input type="password" name="password" placeholder="пароль" autofocus required>
  <button type="submit">открыть</button>
